@@ -10,7 +10,7 @@
 Plugin Name: Docxpresso
 Plugin URI: http://www.docxpresso.com
 Description: Docxpresso inserts content from a document file (.odt).
-Version: 1.0
+Version: 2.1
 Author: No-nonsense Labs
 License: GPLv2 or later
 */
@@ -36,13 +36,11 @@ class CreateDocument
     public static $config;
 
     /**
-     * unique id
-     * 
+     * It can be 'text' for .odt files or 'spreadsheet' for .ods files
      * @var string
      * @access public
-     * @static
      */
-    public static $unid;
+    public static $docType;
        
     /**
      * holds all the XMLs and media of the document zip file
@@ -67,11 +65,23 @@ class CreateDocument
     public function __construct($params = array())
     {
         //initialize certain required variables
-
         //parse the config.ini file
         self::$config = \parse_ini_file( 'config.ini', true); 
         //extract the relevant data from the template
         $path = $params['template'];
+        //get extension to define the doc type
+        $extension = $extension = substr($path, -4);
+        $allowedTemplateExtensions = array('.odt' => true, 
+                                           '.ods' => true);
+        if (!isset($allowedTemplateExtensions[$extension])) { 
+            exit('Invalid template extension');
+        }
+
+        if ($extension == '.ods') {
+            self::$docType = 'spreadsheet';
+        } else {
+            self::$docType = 'text';
+        }
 
         //extract into memory all files from the template
         $template = new \ZipArchive();
@@ -91,27 +101,6 @@ class CreateDocument
         $this->_dom['META-INF/manifest.xml'] = new \DOMDocument();
         $this->_dom['META-INF/manifest.xml']
              ->loadXML($this->template['META-INF/manifest.xml']);  
-        //get the relevant nodes for processing
-        $ns = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0';
-        $this->content = $this->_dom['content.xml']
-                              ->getElementsByTagNameNS($ns, 'text')
-                              ->item(0);
-        $this->_styles = $this->_dom['content.xml']
-                             ->getElementsByTagNameNS($ns, 'automatic-styles')
-                             ->item(0);
-        $this->fonts = $this->_dom['styles.xml']
-                            ->getElementsByTagNameNS($ns, 'font-face-decls')
-                            ->item(0);
-        $this->_mainStyles = $this->_dom['styles.xml']
-                            ->getElementsByTagNameNS($ns, 'automatic-styles')
-                            ->item(0);
-        $this->_styleStyles = $this->_dom['styles.xml']
-                            ->getElementsByTagNameNS($ns, 'styles')
-                            ->item(0);
-        $ns = 'urn:oasis:names:tc:opendocument:xmlns:manifest:1.0';
-        $this->manifest = $this->_dom['META-INF/manifest.xml']
-                               ->getElementsByTagNameNS($ns, 'manifest')
-                               ->item(0);
 
     }
     
@@ -162,6 +151,7 @@ class CreateDocument
         if (empty($options['format'])) {
             $options['format'] = 'standard';
         }
+        $options['docType'] = self::$docType;
         $html =  new Odf2html5\ODF2HTML5($this, $path, $options);
         $data = array();
         $data =  $html->renderHTML();

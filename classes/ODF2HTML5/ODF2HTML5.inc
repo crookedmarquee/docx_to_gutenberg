@@ -10,7 +10,7 @@
 Plugin Name: Docxpresso
 Plugin URI: http://www.docxpresso.com
 Description: Docxpresso inserts content from a document file (.odt).
-Version: 1.0
+Version: 2.1
 Author: No-nonsense Labs
 License: GPLv2 or later
 */
@@ -24,6 +24,22 @@ use Docxpresso;
 class ODF2HTML5
 {
     
+    /**
+     * Stores default cell styles for table columns
+     * 
+     * @var array
+     * @access public
+     * @static
+     */
+    public static $colCellStyles = array();
+    /**
+     * Stores list numbering info
+     * 
+     * @var array
+     * @access public
+     * @static
+     */
+    public static $listLevel = array();
     /**
      * Stores information about the stroke scaling factor for rendering SVGs
      * 
@@ -60,6 +76,13 @@ class ODF2HTML5
      * @access private
      */
     private $_charts;
+    /**
+     * Stores the comment nodes
+     * 
+     * @var array
+     * @access private
+     */
+    private $_comments;
     /**
      * Generated CSS string
      * 
@@ -110,12 +133,26 @@ class ODF2HTML5
      */
     private $_doc;
     /**
+     * Type of document to be parsed
+     * 
+     * @var string
+     * @access private
+     */
+    private $_docType;
+    /**
      * Stores all the required DOMDocument objects
      * 
      * @var DOMDocument
      * @access private
      */
     private $_dom;
+    /**
+     * This array stores the required path info about drop caps in paragraphs
+     * 
+     * @var array
+     * @access private
+     */
+    private $_dropcaps;
     /**
      * ending variable delimiter
      * 
@@ -190,12 +227,26 @@ class ODF2HTML5
      */
     private $_images;
     /**
+     * if true loads JQuery
+     * 
+     * @var boolean
+     * @access private
+     */
+    private $_loadJQuery;
+    /**
      * This array stores the relationship among master and layout styles
      * 
      * @var array
      * @access private
      */
     private $_masterLayout;
+    /**
+     * A boolean that states if there are math formulas to parse
+     * 
+     * @var boolean
+     * @access private
+     */
+    private $_math;
     /**
      * Metadata information
      * 
@@ -232,12 +283,43 @@ class ODF2HTML5
      */
     private $_parseCharts;
     /**
+     * Determines if comments should be parsed
+     * 
+     * @var boolean
+     * @access private
+     */
+    private $_parseComments;
+    /**
+     * if set to true tries to parse URLs pointing to external services like
+     * youtube or Google forms
+     * 
+     * @var boolean
+     * @access private
+     */
+    private $_parseExternalServiceLinks;
+    /**
      * Determines if document layout is parsed
      * 
      * @var boolean
      * @access private
      */
     private $_parseLayout;
+    /**
+     * Stores info about paragraphs with a border
+     * 
+     * @var array
+     * @access public
+     * @static
+     */
+    private $_pBorders = array();
+    /**
+     * Stores info about paragraphs with a margin
+     * 
+     * @var array
+     * @access public
+     * @static
+     */
+    private $_pMargins = array();
     /**
      * prefix used as a namespace for styles
      * 
@@ -253,12 +335,41 @@ class ODF2HTML5
      */
     private $_rawPath;
     /**
+     * Scale factor to harmonize line height rendering in Office and
+     * Internet Browsers
+     * 
+     * @var integer
+     * @access private
+     */
+    private $_scaleLineHeight;
+    /**
+     * List of external services we wish to parse
+     * 
+     * @var array
+     * @access private
+     */
+    private $_services;
+    /**
      * True if we want the ouput to be a single file
      * 
      * @var bool
      * @access private
      */
     private $_singleFile;
+    /**
+     * ",." for english locale or ".," for spanish locale
+     * 
+     * @var string
+     * @access private
+     */
+    private $_sortNumberFormat;
+    /**
+     * True if we want the tables to be sortable
+     * 
+     * @var bool
+     * @access private
+     */
+    private $_sortTables;
     /**
      * starting varaible delimiter
      * 
@@ -302,6 +413,13 @@ class ODF2HTML5
      */
     private $_SVGParser;
     /**
+     * If true the result will be tabbed (only spreadsheets)
+     * 
+     * @var boolean
+     * @access private
+     */
+    private $_tabs;
+    /**
      * The DOMXPath object obtained from $this->_dom
      * 
      * @var DOMXPath
@@ -323,7 +441,49 @@ class ODF2HTML5
         //initialize variables
         $this->_prefix = 'h5p_' . uniqid() . ' ';
         $this->_rawPath = $path;
+        $this->_services = array(
+            'https://youtu.be/' => array('youtube', '/https:\/\/youtu.be\/([a-zA-Z0-9?=&%_\-]*)/'),
+            'https://goo.gl/forms/' => array('googleForms', 
+                                             '/https:\/\/goo.gl\/forms\/([a-zA-Z0-9?=&%_\-]*)/'),
+            'https://docs.google.com/document/' => array('googleDocs', 
+                                             '/https:\/\/docs.google.com\/document\/d\/([a-zA-Z0-9?=&%_\-\/]*)/')
+        );
+        if (isset($options['docType'])) {
+            $this->_docType = $options['docType'];
+        } else {
+            $this->_docType = 'text';
+        }
+        if (isset($options['tabs'])) {
+            $this->_tabs = $options['tabs'];
+        } else {
+            $this->_tabs = false;
+        }
+        if (isset($options['sortTables'])) {
+            $this->_sortTables = $options['sortTables'];
+        } else {
+            $this->_sortTables = true;
+        }
+        if (isset($options['sortNumberFormat'])) {
+            $this->_sortNumberFormat = $options['sortNumberFormat'];
+        } else {
+            $this->_sortNumberFormat = Docxpresso\CreateDocument::$config['locale']['numFormat'];
+        }
         $this->_download = true;
+		if (isset($options['linkTargetToBlank'])) {
+            $this->_linkTargetToBlank = $options['linkTargetToBlank'];
+        } else {
+            $this->_linkTargetToBlank = false;
+        }
+        if (isset($options['parseExternalServiceLinks'])) {
+            $this->_parseExternalServiceLinks = $options['parseExternalServiceLinks'];
+        } else {
+            $this->_parseExternalServiceLinks = true;
+        }
+        if (isset(Docxpresso\CreateDocument::$config['ODF2HTML5']['scaleLineHeight'])) {
+            $this->_scaleLineHeight = Docxpresso\CreateDocument::$config['ODF2HTML5']['scaleLineHeight'];
+        } else {
+            $this->_scaleLineHeight = 1;
+        }
         if (!isset($options['parseLayout']) || $options['parseLayout'] == true) {
             $this->_parseLayout = true;
         } else {
@@ -335,10 +495,21 @@ class ODF2HTML5
         } else {
             $this->_chartJS = false;
         }
+        //set global comment parsing defaults
+        if (!isset($options['comments']) || $options['comments'] == true) {
+            $this->_commentJS = true;
+        } else {
+            $this->_commentJS = false;
+        }
+
         if (isset($options['css'])) {
             $CSSPath = $options['css'];
-        } else {            
+        } else {   
+            if($this->_docType == 'spreadsheet'){         
+            	$CSSPath = __DIR__ . '/defaultODS.css';
+            } else {
                 $CSSPath = __DIR__ . '/default.css';
+            }
         }
         //take into account external CSS props
         try {
@@ -357,34 +528,42 @@ class ODF2HTML5
         } else {
             $this->_metadata = false;
         }
+        self::$listLevel = array();
         $this->_charts = array();
-        $this->_defaultFontSize = '';
+        $this->_comments = array();
+        $this->_footnotes = array();
+        $this->_endnotes = array();
+        $this->_defaultFontSize = NULL;
+        $this->_defaultStyle= array();
         $this->_forms = array();
         $this->_HTML = array();
         $this->_HTMLStructure = array();
         $this->_images = array();
         $this->_noteCounter = 0;
+        $this->_math = false;
         $this->_masterLayout = array();
         $this->_style = array();
         $this->_style2master = array();
         $this->_style2style = array();
         $this->_pageStyle = array();
-        $this->_parentStyle = array();   
+        $this->_parentStyle = array(); 
+        $this->_dropcaps = array();
+        
+        //Chart parsing
         if (isset($options['parseCharts'])) {
             $this->_parseCharts = $options['parseCharts'];
         } else {
             $this->_parseCharts = true;
         }
-        //SVG parsing
-        if (isset($options['parseSVG'])) {
-           $this->_SVG = $options['parseSVG'];
+        
+        //Comment parsing
+        if (isset($options['parseComments']) && $options['parseComments'] == 'true') {
+            $this->_parseComments = true;
         } else {
-            $this->_SVG = true;
+            $this->_parseComments = false;
         }
-        if ($this->_SVG){
-            $this->_SVGParser = new SVGParser($this);
-            $this->_backImages = array();
-        }
+        
+        
         $this->_CSS = '';
         $this->_currentHTMLPage = 0;
         $this->_currentMasterStyle = '';
@@ -401,9 +580,28 @@ class ODF2HTML5
         $this->_doc = $doc;
         $this->_dom = $doc->getDOM();
         $this->_xpath = new \DOMXPath($this->_dom['content.xml']);
+        $this->_xpath->registerNamespace('table',
+        'urn:oasis:names:tc:opendocument:xmlns:table:1.0');
+        $this->_xpath->registerNamespace('text',
+        'urn:oasis:names:tc:opendocument:xmlns:text:1.0');
+        $this->_xpath->registerNamespace('style',
+        'urn:oasis:names:tc:opendocument:xmlns:style:1.0');
+        $this->_xpath->registerNamespace('form',
+        'urn:openoffice:names:experimental:ooxml-odf-interop:xmlns:form:1.0');
         //define some required objects to start to build the HTML5 file
         $this->_body = new \DOMDocument();
         $this->_body->loadXML('<body />');
+        
+        //SVG parsing
+        if (isset($options['parseSVG'])) {
+           $this->_SVG = $options['parseSVG'];
+        } else {
+            $this->_SVG = true;
+        }
+        if ($this->_SVG){
+            $this->_SVGParser = new SVGParser($this->_doc);
+            $this->_backImages = array();
+        }
         
         if ($this->_SVG) {
             //look for draw background images
@@ -415,22 +613,21 @@ class ODF2HTML5
                 $this->_backImages[$imgName] = $path;
             }
         }
-        //build the different HTML5 document portions
-        //$this->_generateHead();
-        $this->_generateStyle();
-        $this->_generateBody();
-        /*echo '<body>';
-        foreach ($this->_HTML as $key => $value) {
-            $node = $value['xml'];
-            echo $node->ownerDocument->saveXML($node);
+        //to properly take into account continuous numbering of lists we
+        //should preparse the lists
+        $this->_preParseLists();
+        //we have to check if there default cell styles for columns
+        $this->_preParseColCellStyles();
+        if ($this->_parseExternalServiceLinks) {
+            $this->_preParse4Services();
         }
-        echo '</body>';*/
-        
-        //$this->_render();
+        //build the different HTML5 document portions
+        $this->_generateStyle();
+        $this->_mergeParentStyles(); 
+        $this->_generateBody();
     }
       
     /*Getters and Setters*/
-    
     
     /**
      * Gets the HTML5 body element as a string
@@ -511,7 +708,10 @@ class ODF2HTML5
      */
     private function _framePositioning($newNode, $frame, $type = 'image')
     {
-        
+        //respecting positioning there is an special case that we should take 
+        //into account frams containing text-boxes
+        $firstChild = $frame->firstChild;
+        $fcName = $firstChild->nodeName;
         $style = 'z-index: 100;';
         if ($type == 'image'){
             $width = $frame->getAttribute('svg:width');
@@ -520,7 +720,7 @@ class ODF2HTML5
             }
         }
         $height = $frame->getAttribute('svg:height');
-        if (!empty($height)) {
+        if (!empty($height) && $fcName != 'draw:text-box') {
             $style .= 'height: ' . $height . ';';
         }
         $width = $frame->getAttribute('svg:width');
@@ -531,10 +731,12 @@ class ODF2HTML5
         $anchorType = $frame->getAttribute('text:anchor-type');
         if ($anchorType != 'as-char') {
             //$style .= 'display: block';
+        } else if ($fcName == 'draw:text-box') {
+            $style .= 'display: inline-block';
         } else if ($type != 'object') {
-            $style .= 'display: inline';
+            $style .= 'display: inline;';
         }
-        $newNode->setAttribute('style', $style);
+        
         if ($type == 'frame') {
             $class= '';
             $class .= $frame->getAttribute('draw:class-names');
@@ -562,8 +764,30 @@ class ODF2HTML5
                                          'float: right',
                                          $this->_style['div.' . $class]);
                 }
+            } else {
+                //$style .= 'margin-left: ' . $offset . 'pt;';
             }
         }
+        //check if there is a transform attribute
+        $transform = $frame->getAttribute('draw:transform');
+        if (!empty($transform)){
+            if(empty($width)){
+                $width = 0;
+            } else {
+                $width = $this->_resize(0.5, $width);
+            }
+            if(empty($height)){
+                $height = 0;
+            } else {
+                $height = $this->_resize(0.5, $height);
+            }
+            //we need to use width and height because in the browser the
+            //axis of rotation is located in the center of the image while in the
+            //odt is in the top left corner
+            $style .= $this->_parseTransform('transform', $transform, $width, $height);
+        }
+        //apply the style
+        $newNode->setAttribute('style', $style);
     }
     
     /**
@@ -580,7 +804,11 @@ class ODF2HTML5
         //get the office:text node to start the parsing
         $content = $this->_dom['content.xml'];
         $ns = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0';
-        $root = $content->getElementsByTagNameNS($ns, 'text')->item(0);
+        if ($this->_docType == 'spreadsheet') {
+            $root = $content->getElementsByTagNameNS($ns, 'spreadsheet')->item(0);
+        } else {
+            $root = $content->getElementsByTagNameNS($ns, 'text')->item(0);
+        }
         $rootChilds = $root->childNodes;
         $body = $this->_body->documentElement;
         $n = 0;
@@ -588,13 +816,20 @@ class ODF2HTML5
             if ($child->nodeType == 1) {
                 $parsedNode = $this->_parseODFNode($child, $body, false);
                 if (!empty($parsedNode)) {
+                    if ($parsedNode->nodeName == 'table') {
+                        //for responsiveness we are going to wrapp the tables
+                        //within a div
+                        $divNode = $this->_body->createElement('div');
+                        $divNode->setAttribute('class', 'dxoResponsiveTable');
+                        $divNode->appendChild($parsedNode);
+                        $parsedNode = $divNode;
+                    }
                     $this->_HTML[$n]['xml'] = $parsedNode;
                     $n++;
                     $this->_currentNode = $n;
                 }
             }
         }
-        
     }
     
     /**
@@ -644,8 +879,18 @@ class ODF2HTML5
                            && $parsable[$child->nodeName]) {
                     $temp = \explode(':', $child->nodeName);
                     $name = \array_pop($temp);
+                    if ($name == 'keyword') {
+                        if (isset($metadata['keyword'])) {
+                            $value = ',' . $child->nodeValue;
+                            $metadata['keyword'] .= $value;
+                        } else {
+                            $value = $child->nodeValue;
+                            $metadata['keyword'] = $value;
+                        }
+                    } else {
                     $value = $child->nodeValue;
                     $metadata[$name] = $value;
+                    }
                 }
             }
         } else {
@@ -666,6 +911,9 @@ class ODF2HTML5
      */
     private function _generateStyle()
     { 
+        //get the automatic style nodes from content.xml
+        $this->_generateStyleFromSource($this->_dom['content.xml'], 
+                                        'automatic-styles');
         //get the default style
         $this->_generateStyleFromSource($this->_dom['styles.xml'], 'styles');
         if ($this->_SVG && isset($this->_style['img'])) {
@@ -724,7 +972,7 @@ class ODF2HTML5
     }
     
     /**
-     * Generates the path to the image from the ODF sorurce and the options and
+     * Generates the path to the image from the ODF source and the options and
      * stores the image
      *
      * @param string $srcODF
@@ -734,6 +982,9 @@ class ODF2HTML5
      */
     private function _imagePath($srcODF, $css = false)
     {
+        if (strpos($srcODF, 'http://') === 0){
+            return $srcODF;
+        }
         if ($this->_singleFile !== true) {
             //get the image name
             $temp = \explode('/', $srcODF);
@@ -790,7 +1041,7 @@ class ODF2HTML5
         }
         //do the same for the parents
         if (isset($this->_style2style[$style])) {
-            //explicitely set that teh new heading styles should inehrit
+            //explicitely set that the new heading styles should inehrit
             //properties from their corresponding parent styles
             $parent = $this->_style2style[$style];
             $this->_parentStyle[$h] = 'h' . $level . '.' . $parent;
@@ -830,6 +1081,11 @@ class ODF2HTML5
                 $node->appendChild($note);
             }
         }
+        if (\count($this->_comments) > 0){
+            foreach ($this->_comments as $comment){
+                $node->appendChild($comment['content']);
+            }
+        }
     }
 
     /**
@@ -852,27 +1108,202 @@ class ODF2HTML5
     }
     
     /**
-     * Seraches for paddings in borderless paragraphs
+     * This method parses for links to external services not within <a> tags
+     *
+     * @param DOMNode $node
+     * @param DOMDocument $html
+     * @return DOMNode
+     * @access private
+     */
+    private function _check4Services($node, $html)
+    {
+        $sizes = array(
+            'youtube' => array(640, 360),
+            'googleForms' => array('100%', 480),
+            'googleDocs' => array('100%', 640),
+        );
+        $str = $node->nodeValue;
+        $totalLength = strlen($str);
+        $service = false;
+        $found = false;
+        foreach ($this->_services as $key => $value){
+            $initial = stripos($str, $key);
+            if ($initial !== false){
+                $service = $value;
+                break;
+            }
+        }
+
+        if (!empty($service)) {
+            //get the required info via a regular expression
+            $regex = $service[1];
+            preg_match_all($regex, $str, $matches);
+            if (isset($matches[1]) && !empty($matches[1][0])){
+                $length = strlen($matches[0][0]);
+                $container = $html->createElement('span');
+                if ($initial != 0) {
+                    $substr = substr($str, 0, $initial);
+                    $text = $html->createTextNode($substr);
+                    $container->appendChild($text);
+                }
+                //insert the iframe
+                //first try to extract width and height info
+                $tmp = explode('?', $matches[0][0]);
+                $src = $tmp[0];
+                if (!empty($tmp[1])) {
+                    $prewidth = $this->_getIframeSize($tmp[1], 'width');
+                    $preheight = $this->_getIframeSize($tmp[1], 'height');
+                } else {
+                    $prewidth = false;
+                    $preheight = false;
+                }
+                
+                if ($service[0] == 'youtube') {
+                    //in order to embed youtube videos we have to generate
+                    //an embedding url
+                    $src = 'https://www.youtube-nocookie.com/embed/';
+                    $srctmp = explode('?', $matches[1][0]);
+                    $src .= $srctmp[0];
+                    $src .= '?rel=0';
+                    //check if there is a defined size otherwise make it 
+                    //responsive
+                    if (!empty($prewidth) || !empty($preheight)){
+                        if($prewidth){
+                            $width = $prewidth;
+                        } else {
+                            $width = $sizes[$service[0]][0];
+                        }
+                        if($preheight){
+                            $height = $preheight;
+                        } else {
+                            $height = $sizes[$service[0]][1];
+                        }
+                        $iframe = $html->createElement('iframe', ' ');
+                        $iframe->setAttribute('src', $src);
+                        $iframe->setAttribute('width', $width);
+                        $iframe->setAttribute('height', $height);
+                        $iframe->setAttribute('allowfullscreen', true);
+                        $container->appendChild($iframe);
+                    } else {
+                        $video = $html->createElement('div');
+                        $video->setAttribute('class', 'youtube');
+                        $iframe = $html->createElement('iframe', ' ');
+                        $iframe->setAttribute('src', $src);
+                        $iframe->setAttribute('allowfullscreen', true);
+                        $video->appendChild($iframe);
+                        $container->appendChild($video);
+                    }  
+                } else {
+                    if($prewidth){
+                        $width = $prewidth;
+                    } else {
+                        $width = $sizes[$service[0]][0];
+                    }
+                    if($preheight){
+                        $height = $preheight;
+                    } else {
+                        $height = $sizes[$service[0]][1];
+                    }
+                    $iframe = $html->createElement('iframe', ' ');
+                    $iframe->setAttribute('src', $src);
+                    $iframe->setAttribute('width', $width);
+                    $iframe->setAttribute('height', $height);
+                    $container->appendChild($iframe);
+                } 
+                
+                if ($totalLength > $initial + $length +1) {
+                    $substr = substr($str, $initial + $length);
+                    $text = $html->createTextNode($substr);
+                    $container->appendChild($text);
+                }
+                return $container;
+            }
+        }
+        return $html->createTextNode($node->nodeValue);
+    }
+    
+    /**
+     * This method gets the width or height passed to an external service
+     *
+     * @param string $str
+     * @param string $dimension
+     * @return mixed
+     * @access private
+     */
+    private function _getIframeSize($str, $dimension)
+    {
+        $regex = '/' . $dimension. '=([0-9%]*)/';
+        preg_match_all($regex, $str, $matches);
+        if (isset($matches[1]) && !empty($matches[1][0])){
+            $size = $matches[1][0];
+        } else {
+            if ($dimension == 'width'){
+                $size = false;
+            } else {
+                $size = false;
+            }
+        }
+        return $size;
+    }
+    
+    
+    /**
+     * Searches for paddings in borderless paragraphs and keep border
+     * information for further parsing
      *
      * @param string $style
      * @return string
      * @access private
      */
-    private function _clearPaddings($style)
+    private function _repairParagraphStyles($style, $class)
     {
+        //TODO: check if for the plugin is always better to
+        //remove the paddings following standard Word behaviour
+        $paddings2remove = array();
+        //check if there are borders set
+        $regex = '/(border-*[^;]*):([^;]+);?/i';
+        \preg_match_all($regex, $style, $matches);
+        if (isset($matches[1]) && isset($matches[2])) {
+            $num = \count($matches[2]);
+            for($j=0 ; $j < $num; $j++) {
+                if (\trim($matches[2][$j]) == 'none'){
+                    $paddings2remove[] = $matches[1][$j];
+                } else {
+                    if (!isset($this->_pBorders[$class])) {
+                        $this->_pBorders[$class] = array();
+                    }
+                        $this->_pBorders[$class][] = $matches[0][$j];
+                }
+            }
+        } 
+        //check if there are margins set (important for bordered paragraphs)
+        $regex = '/(margin-*[^;]*):([^;]+);?/i';
+        \preg_match_all($regex, $style, $matches);
+        if (isset($matches[1]) && isset($matches[2])) {
+            $num = \count($matches[2]);
+            for($j=0 ; $j < $num; $j++) {
+                if (!isset($this->_pMargins[$class])) {
+                    $this->_pMargins[$class] = array();
+                }
+                $arrayMargins = explode(':', $matches[0][$j]);
+                $km = trim($arrayMargins[0]);
+                $kv = trim($arrayMargins[1]);
+                $this->_pMargins[$class][$km] = $kv;
+            }
+        }
+        if (\strpos($style, "border:") === false
+            || \strpos($style, "border: none") !== false  ){
+            $regex = '/padding:[^;]+;?/i';
+            $style = \preg_replace($regex, '', $style);
+            return $style;
+        }
         if (\strpos($style, "padding") === false){
             return $style;
         } else {
-            $regex = '/border:([^;]+);?/i';
-            \preg_match($regex, $style, $matches);
-            if (!isset($matches[1])) {
-                return $this->_removePadding($style);
+            if (\count($paddings2remove) > 0) {
+                return $this->_removePadding($style, $paddings2remove);
             } else {
-                if (\strpos($matches[1], "none") === false) {
-                    return $style;
-                } else {
-                    return $this->_removePadding($style);
-                }
+                return $style;
             }
         }
     }
@@ -903,7 +1334,11 @@ class ODF2HTML5
                     $span = $html->createElement('span');
                     $htmlNode = $htmlNode->appendChild($span);
                 }
-                $newNode = $html->createTextNode($odfNode->nodeValue);
+                if ($this->_parseExternalServiceLinks) {
+                    $newNode = $this->_check4Services($odfNode, $html);
+                } else {
+                    $newNode = $html->createTextNode($odfNode->nodeValue);
+                }
                 break;
             case 'text:s':
                 $num = $odfNode->getAttribute('text:c');
@@ -913,7 +1348,11 @@ class ODF2HTML5
                 for ($j=1; $j < $num; $j++){
                     $newNode = $html->createEntityReference('nbsp');
                     $htmlNode->appendChild($newNode);
+                    $wbr = $html->createElement('wbr');
+                    $htmlNode->appendChild($wbr);
                 }
+                $wbr = $html->createElement('wbr');
+                $htmlNode->appendChild($wbr);
                 $newNode = $html->createEntityReference('nbsp');
                 break;
             case 'text:tab':
@@ -921,7 +1360,11 @@ class ODF2HTML5
                 $htmlNode->appendChild($newNode);
                 break;
             case 'text:a':
-                $newNode = $html->createElement('a');
+                if ($odfNode->hasChildNodes()){
+                    $newNode = $html->createElement('a');
+                } else {
+                    $newNode = $html->createElement('a', ' ');
+                }
                 //we need to check if there is a containing span that
                 //incorporates underline-text: none and if so set the
                 //style attribute accordingly otherwise the browsers will
@@ -931,12 +1374,12 @@ class ODF2HTML5
                     $newNode->setAttribute('style', 
                                            'text-decoration: none');
                 }
-                
                 break;
             case 'text:bookmark':
             case 'text:bookmark-start':
                 $newNode = $html->createElement('span');
-                $id = $odfNode->getAttribute('text:name');
+                $ns = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+                $id = $odfNode->getAttributeNS($ns, 'name');
                 $newNode->setAttribute('id', $id);
                 break;
             case 'text:bookmark-end':               
@@ -945,24 +1388,50 @@ class ODF2HTML5
                 $tag = false;
                 break;
             case 'text:h':
-                $level = $odfNode->getAttribute('text:outline-level');
-                if (!empty($level) && $level > 0 && $level < 7){
-                    $newNode = $html->createElement('h' . $level);
+                $l = $odfNode->getAttribute('text:outline-level');
+                if (empty($l)) {
+                    //use the default ODF level style
+                    $l = 1;
+                }
+                $pChilds = $odfNode->hasChildNodes();
+                if ($l > 0 && $l < 7){
+                    $newNode = $html->createElement('h' . $l);
+                    if (!$pChilds){
+                        $newNode = $html->createElement('h' . $l, '&nbsp;');
+                    } else {
+                        $newNode = $html->createElement('h' . $l);
+                    }
                     //Like the styles for a ODF header belong to the same family
                     //than normal paragraphs we have to add the corresponding
                     //styles to the $_style array
                     $hStyle = $odfNode->getAttribute('text:style-name');
                     if (!empty($hStyle)) {
-                        $this->_addHeadingStyle($level, $hStyle);
+                        $this->_addHeadingStyle($l, $hStyle);
                     }
                 } else {
-                    $newNode = $html->createElement('p');
+                    if (!$pChilds){
+                        $newNode = $html->createElement('p', '&nbsp;');
+                    } else {
+                        $newNode = $html->createElement('p');
+                    }
                 }
                 //check if the element is the child of a list-item and proceed
                 //accordingly
                 $this->_parentListStyle($odfNode, $newNode);
+                //take care of inheritance in the case of numbered headings
+                $hSt = $odfNode->getAttribute('text:style-name');
+                if (!empty($hStyle)
+                    && isset($this->_style['h' . $l . ':before'])
+                    && isset($this->_style['h' . $l . '.' . $hSt . ' span'])) {
+                    $st = $this->_style['h' . $l . '.' . $hSt . ' span'];
+                    //remove text decorations with a hack
+                    $st = \str_replace('text-decoration', 'textdecor', $st);
+                    $this->_style['h' . $l . ':before'] .= $st;
+                }  
+                
                 break;
             case 'text:p':
+            case 'text:numbered-paragraph':
                 $newNode = $html->createElement('p');
                 //if it is an empty pargraph node we have to insert a &nbsp; so
                 //it is rendered in the browser
@@ -980,12 +1449,39 @@ class ODF2HTML5
                 $newNode = $html->createElement('span');
                 break;
             case 'text:line-break':
+                //this gets somehow messy because a text-line element at the
+                //end of a paragraph is not ignored like in HTML browsers
+                //let us first check if it is the las "br" at the end of a 
+                //paragraph
+                $parentNode = $odfNode->parentNode;
+                if ($parentNode->nodeName == 'text:span'){
+                    //check the number of childs
+                    $childNum = $parentNode->childNodes->length;
+                    if ($childNum == 1) {
+                        //the line-break is the only node so if the parent span
+                        //is the last span of the paragraph make it display like
+                        //a block element
+                        $granpaNode = $parentNode->parentNode->nodeName;
+                        if (!empty($granpaNode) &&
+                            $granpaNode != 'text:span' && 
+                            empty($parentNode->nextSibling)){
+                            $htmlNode->setAttribute('style', 'display:block');
+                        }
+                    }
+                }
                 $newNode = $html->createElement('br');
                 break;
             case 'text:section':
                 $newNode = $html->createElement('div');
                 break;
             case 'table:table':
+                if ($append) {
+                    //for responsiveness we are going to wrapp the table with a 
+                    //div
+                    $divNode = $html->createElement('div');
+                    $divNode->setAttribute('class', 'dxoResponsiveTable');
+                    $htmlNode = $htmlNode->appendChild($divNode);
+                }
                 $newNode = $html->createElement('table');
                 break;
             case 'table:table-column':
@@ -994,11 +1490,28 @@ class ODF2HTML5
             case 'table:table-columns':
                 $newNode = $html->createElement('colgroup');
                 break;
+            case 'table:table-header-rows':
+                $newNode = $html->createElement('thead');
+                break;
             case 'table:table-row':
                 $newNode = $html->createElement('tr');
                 break;
             case 'table:table-cell':
-                $newNode = $html->createElement('td');
+                $rowType = $odfNode->parentNode->parentNode->nodeName;
+                if ($rowType == 'table:table-header-rows' 
+                    && $this->_sortTables) {
+                    //we use td instead of th in order not to duplicate all
+                    //td styles
+                    $newNode = $html->createElement('td');
+                    $textContent = \strip_tags($odfNode->nodeValue);
+                    if (substr($textContent, 0, 1) == '@') {
+                        //we want to sort table values by this column
+                        $newNode->setAttribute('data-sorting', '1');
+                        $newNode->setAttribute('data-sortingOrder', 'ASC');
+                    }
+                } else {
+                    $newNode = $html->createElement('td');
+                }
                 break;
             case 'text:list':
                 $newNode = $html->createElement('ul');
@@ -1023,8 +1536,12 @@ class ODF2HTML5
                     && isset($this->_style['p.' . $pStyle ])) {
                     $st .= $this->_style['p.' . $pStyle];
                 }
+                //remove text decorations and margin-left/(text-indent) 
+                //with a hack
+                $st = \str_replace('text-decoration', 'textdecor' , $st);
+                $st = \str_replace('margin-left', 'mleft' , $st);
+                //$st = \str_replace('text-indent', 'tindent' , $st);
                 $newNode->setAttribute('style', $st);
-
                 break;
             case 'text:note':
                 $newNode = $html->createElement('sup');
@@ -1033,22 +1550,51 @@ class ODF2HTML5
                 $noteLink->setAttribute('href', '#' . $noteData['id']);
                 $newNode->appendChild($noteLink);  
                 break;
+            case 'office:annotation':
+                if ($this->_parseComments) {
+                    $newNode = $html->createElement('span', ' ');
+                    $cName = 'c_' . $odfNode->getAttribute('office:name');
+                    $newNode->setAttribute('id', $cName);
+                    $newNode->setAttribute('class', 'h5p_comment');
+                    $htmlNode->appendChild($newNode);
+                    $this->_comments[$cName] = $this->_comment2HTML($odfNode,
+                                                                    $cName);
+                }
+                return NULL;
+                break;
+            case 'draw:a':
+                $newNode = $html->createElement('a');
+                break;
             case 'draw:frame':
                 //The frames are not rendered unless they are childs of the
                 //following nodes
                 $fParents = array('text:p' => true,
                                   'text:h' => true,
                                   'text:a' => true, 
-                                  'text:span' => true);
+                                  'text:span' => true,
+                                  //TODO: check that table-cell works for odt
+                                  'table:table-cell' => true,
+                                  'draw:g' => true,
+                                  'draw:a' => true,
+                                  'table:shapes' => true,
+                    );
                 $parent = $odfNode->parentNode->nodeName;                
                 if (isset($fParents[$parent])) {
                     $display = $odfNode->getAttribute('text:anchor-type');
-                    if ($display != 'as-char') {
+                    $firstChild = $odfNode->firstChild;
+                    if ($display != 'as-char' 
+                        || $firstChild->nodeName == 'draw:text-box') {
                         $newNode = $html->createElement('div');
+                        $newNode->setAttribute('data-anchor-type', $display);
                         //let us define the source
                         $this->_framePositioning($newNode, $odfNode, 'frame');
                     } else {
                         $newNode = $html->createElement('span');
+                        /*$newNode = $html->createElement('div');
+                        $newNode->setAttribute('style', 
+                                               'display: inline !important');
+                        $class = $odfNode->getAttribute('draw:style-name');
+                        $newNode->setAttribute('class', $class);*/
                     }
                 } else {
                     return NULL;
@@ -1084,6 +1630,8 @@ class ODF2HTML5
                 if ($descNodes->length > 0) {
                    $desc = $descNodes->item(0)->nodeValue; 
                    $newNode->setAttribute('alt', $desc);
+                } else {
+                   $newNode->setAttribute('alt', '');
                 }
                 break;
             case 'draw:object':
@@ -1095,16 +1643,58 @@ class ODF2HTML5
                     $frame = $odfNode->parentNode;
                     $name = $frame->getAttribute('draw:name');
                     if (empty($name)) {
-                        $name = \uniqid();
+                        $name = \str_replace('.', '', \uniqid('', true));
                     }
                     $newNode = $html->createElement('div', ' ');
                    $opt = array();
-                    $opt['name'] = 'chart-' . \uniqid();
+                    $opt['name'] = 'chart-';
+                    $opt['name'] .= \str_replace('.', '', \uniqid('', true));
                     $newNode->setAttribute('id', $opt['name']);
                     $this->_framePositioning($newNode, $frame, 'object');
                     $opt['js'] = $this->_chartJS;                    
-                    $chart = new ChartParser($src['data']);                    
+                    $chart = new ChartParser($src['data'],
+                                             $this->_dom['content.xml'],
+                                             $this->_docType);                    
                     $this->_charts[$opt['name']] = $chart->render($opt);
+                } else if (\is_array($src) && 
+                    ($src['object'] == 'math' || $src['object'] == 'oomath')) {
+                    $this->_math = true;
+                    $mathDOM = new \DOMDocument();
+                    $mathDOM->loadXML($src['data']);
+                    $mathNodes = $mathDOM->getElementsByTagName('math');
+                    if ($mathNodes->length > 0) {
+                        $mathNode = $mathNodes->item(0);
+                        $mNode = $html->importNode($mathNode,true);
+                        if ($src['object'] == 'oomath') {
+                            $block = $this->_check4BlockMath($odfNode);
+                            if ($block) {
+                                $mNode->setAttribute('display', 'block');
+                                //we need to check for positioning to avoid
+                                //centering all block math by default
+                                $ancestor = $this->_getFrameBlockAncestor($odfNode);
+                                if ($ancestor->nodeName == 'text:p') {
+                                    $mstyle = $ancestor->getAttribute('text:style-name');
+                                } else {
+                                    $mstyle = $ancestor->getAttribute('table:style-name');
+                                }
+                                if (!empty($mstyle)) {
+                                    $textAlign = $this->_getMathTextAlign($mstyle);
+                                    if (!empty($textAlign)) {
+                                        $mNode->setAttribute('indentalign', $textAlign);
+                                    }
+                                }
+                            }
+                        }
+                        $newNode = $html->createElement('span');
+                        $newNode->setAttribute('class', 'doxMathFormula');
+                        $newNode->appendChild($mNode);
+                    } else {
+                        //we silently leave
+                        $newNode = $htmlNode;
+                        $append = false;
+                        $tag = false;
+                        break;
+                    }
                 } else {
                     //we silently leave
                     $newNode = $htmlNode;
@@ -1413,14 +2003,35 @@ class ODF2HTML5
                 $newNode->setAttribute('value', $value);
                 break;
             case 'draw:g':
-                $baseNode = $html->createElement('div');                    
-                $newNode = $this->_SVGParser->render($baseNode, $odfNode);
+                if ($this->_SVG){
+                    $baseNode = $html->createElement('div');                    
+                    $newNode = $this->_SVGParser->render($baseNode, 
+                                                         $odfNode,
+                                                         $this->_style);
+                } else {
+                    $newNode = $html->createElement('span');
+                }
                 break;
             
             case 'draw:custom-shape':
-                $baseNode = $html->createElement('div');                    
-                $newNode = $this->_SVGParser->render($baseNode, $odfNode);
+                if ($this->_SVG){
+                    $baseNode = $html->createElement('div');                    
+                    $newNode = $this->_SVGParser->render($baseNode, 
+                                                         $odfNode,
+                                                         $this->_style);
+                } else {
+                    $newNode = $html->createElement('span');
+                }
                 break;
+            
+            case 'draw:connector':
+            case 'draw:line':
+                $baseNode = $html->createElement('svg');                    
+                $newNode = $this->_SVGParser->render($baseNode, 
+                                                     $odfNode,
+                                                     $this->_style);
+                break;
+            
              
             default:
                 $newNode = $htmlNode;
@@ -1433,8 +2044,7 @@ class ODF2HTML5
             if (isset($formLabel)) {
                 $htmlNode->appendChild($formLabel);
             }
-        }
-        
+        } 
         if (($odfNode->hasAttributes() 
              || $odfNode->nodeName == 'text:list-item')
             && !empty($newNode)) {
@@ -1442,6 +2052,7 @@ class ODF2HTML5
         }
         
         return $newNode;
+
     }
     
     /**
@@ -1464,6 +2075,13 @@ class ODF2HTML5
                         } else {
                             $this->_style[$key] = $this->_style[$value];
                         }
+                    }
+                    //we have to take care of the case that there is no span
+                    //but the parent has an span style
+                    if (!isset($this->_style[$key . ' span'])
+                        && isset($this->_style[$value . ' span'])) {
+                        $this->_style[$key . ' span'] = 
+                                $this->_style[$value . ' span'];
                     }
                     unset($this->_parentStyle[$key]);
                 }
@@ -1510,7 +2128,7 @@ class ODF2HTML5
             $html->setAttribute('class', 'defaultNote');
             $html->setAttribute('style', 'clear:left');
             $reference = $this->_body->createElement('div');
-            $refStyle = 'display:table-cell; font-size: 10pt';
+            $refStyle = 'display:table-cell; font-size: 10pt;';
             $reference->setAttribute('style', $refStyle);
             $sup = $this->_body->createElement('sup', $data['ref']);
             $reference->appendChild($sup);
@@ -1533,6 +2151,57 @@ class ODF2HTML5
     }
     
     /**
+     * Parses the comment nodes
+     *
+     * @param DOMNode $node
+     * @return void
+     * @access private
+     */
+    private function _comment2HTML($node, $cid)
+    {
+        $data = array();
+        //creator
+        $creator = '';
+        $creatorNodes = $node->getElementsByTagName('creator');
+        if ($creatorNodes->length > 0) {
+            $creator = $creatorNodes->item(0)->nodeValue;
+        }
+        //date
+        $date = '';
+        $dateNodes = $node->getElementsByTagName('date');
+        if ($dateNodes->length > 0) {
+            $date = $dateNodes->item(0)->nodeValue;
+        }
+        /*if (empty($creator)) {
+            $data['creator'] = 'Comment';
+        } else {
+            $data['creator'] = 'Comment by ' . $creator;
+        }*/
+        $data['date'] = $date;
+        
+        //parse the content
+        $html = $this->_body->createElement('div');
+        $html->setAttribute('id', 'div_' . $cid);
+        $html->setAttribute('style', 'display: none');
+        $childs = $node->childNodes;
+        foreach ($childs as $child) {
+            $this->_parseODFNode($child, $html);
+        }
+        $data['content'] = $html;
+        
+        //generate the required javascript
+        $data['script'] = '$("#' . $cid . '").';
+        $data['script'] .= 'webuiPopover({';
+        if (isset($data['creator'])) {
+            $data['script'] .= 'title:"' . $data['creator'] . '",';   
+        }
+        $data['script'] .= 'content: $("#div_' . $cid . '").html(),';
+        $data['script'] .= 'trigger:"hover", backdrop: false});';
+        
+        return $data;
+    }
+    
+    /**
      * Grabs the internal path to the object preparse the data and returns:
      *  NULL: if the object is not to be parsed
      *  an array with the type of object and the xml data
@@ -1552,12 +2221,16 @@ class ODF2HTML5
             $srcODF .= '/';
         }
         $path = $srcODF . 'content.xml';
-        
+
         if (isset($this->_doc->template[$path])) {
             $data = $this->_doc->template[$path];
             //check if it is a chart
             if (\strpos($data, 'office:chart') !== false) {
                 return array('object' => 'chart', 'data' => $data);
+            } else if (\strpos($data, '<math') !== false) {
+                return array('object' => 'math', 'data' => $data);
+            } else if (\strpos($data, '<mml:math') !== false) {
+                return array('object' => 'oomath', 'data' => $data);
             }
         } else {
             return NULL;
@@ -1577,7 +2250,8 @@ class ODF2HTML5
     {
         $parentNode = $odfNode->parentNode;
         $prevSibling = $odfNode->previousSibling;
-        $listStyle = 'display: table-cell; margin-left:0 !important;';
+        $listStyle = 'display: table-cell;';
+        $listStyle .= 'margin-left:0 !important;';
         $listStyle .= 'text-indent: 0 !important;';
         if (!empty($parentNode) 
             && $parentNode->nodeName == 'text:list-item'
@@ -1598,14 +2272,38 @@ class ODF2HTML5
     /**
      * Parses the background image path
      *
+     * @param string $attr
      * @param string $src
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseBackgroundURL($src)
+    private function _parseBackgroundURL($attr, $src, $important = false)
     {   
-        $style = $this->_imagePath($src);
-        return 'url(' . $style . ')';
+        if (!empty($src)) {
+            $style = $this->_imagePath($src);
+            return 'background-image: url(' . $style . ');';
+        }
+    }
+    
+    /**
+     * Parses the background image path
+     *
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
+     * @access private
+     */
+    private function _parseBackgroundRepeat($name, $value, $important = false)
+    {   
+        if ($value == 'stretch') {
+            return 'background-size: cover;';
+        } else if ($value == 'repeat') {
+            return 'background-repeat: repeat;';
+        } else if ($value == 'no-repeat') {
+            return 'background-repeat: no-repeat;';
+        }
     }
     
     /**
@@ -1614,10 +2312,11 @@ class ODF2HTML5
      *
      * @param string $name
      * @param string $value
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseBorders($name, $value)
+    private function _parseBorders($name, $value, $important = false)
     {   
         $temp = explode(':', $name);
         $prop = \array_pop($temp);
@@ -1636,7 +2335,46 @@ class ODF2HTML5
                return;
            }
         } 
-        return $prop . ': ' . $value . ';';
+        $style = $prop . ': ' . $value;
+        if ($important) {
+            $style .= ' !important;';
+        } else {
+            $style .= ';';
+        }
+        return $style;
+    }
+    
+    /**
+     * Parses the column count property
+     *
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
+     * @access private
+     */
+    private function _parseColumnCount($name, $value, $important = false)
+    {   
+        //we need a method to take care of the special case of 1 because
+        //browsers get confused if there is a page-break:column afterwards
+        //allowing for the creation of a new column even if the count is set
+        //explicitely to 1
+        if ($value == 1) {
+            $style = 'column-count: initial';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        } else {
+            $style = 'column-count: ' . $value;
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        } 
+        return $style;
     }
     
     /**
@@ -1644,20 +2382,32 @@ class ODF2HTML5
      *
      * @param string $line
      * @param string $data
+     * @param boolean $important
      * @return string
      * @access private
      */
-    private function _parseDecoration ($line, $data)
+    private function _parseDecoration ($line, $data,  $important = false)
     {   
         $style = '';
         $lines = array('style:text-underline-style' => 'underline',
                        'style:text-overline-style' => 'overline', 
-                       'style:text-line-trough-text-style' => 'line-trough', 
+                       'style:text-line-through-style' => 'line-through', 
+                       'style:text-line-through-text-style' => 'line-through', 
                        );
         if (isset($lines[$line]) && $data != 'none') {
-            $style .= 'text-decoration: ' . $lines[$line]. ';';
+            $style .= 'text-decoration: ' . $lines[$line];
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
         } else if ($data == 'none') {
-            $style .= 'text-decoration: none !important;';
+            $style .= 'text-decoration: none';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
         }
         $types = array('none' => 'none',
                        'dash' => 'dashed', 
@@ -1669,7 +2419,12 @@ class ODF2HTML5
                        'wave' => 'wavy',
                        );
         if (isset($types[$data])) {
-            $style .= 'text-decoration-style: ' . $types[$data]. ';';
+            $style .= 'text-decoration-style: ' . $types[$data];
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
         }
         return $style;
     }
@@ -1679,15 +2434,111 @@ class ODF2HTML5
      *
      * @param string $name
      * @param string $value
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseFill($name, $value)
+    private function _parseFill($name, $value, $important = false)
     {   
         if ($value == 'none') {
-            return 'fill: none;';
+            $style = 'fill: none';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
         } else if ($value == 'bitmap') {
-            return 'fill-opacity: 0;';
+            $style = 'fill-opacity: 0';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+            $style .= 'fill: transparent';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        } else {
+            $style = '';
+        }
+        return $style;
+    }
+    
+    /**
+     * Parses the font family property
+     *
+     * @param string $name
+     * @param string $value
+     * @param boolean $important
+     * @return string
+     * @access private
+     */
+    private function _parseFontFamily($name, $value, $important = false)
+    {   
+        //some systems introduce an extra number in standard font names so
+        //we should remove them
+        $numbers = array('1', '2', '3', '4', '5', '6', '7', '8', '9');
+        $value = str_replace($numbers, '', $value);
+        $style = 'font-family: ' . $value;
+        if ($important) {
+            $style.= ' !important;';
+        } else {
+            $style .= ';';
+        }
+        return $style;
+    }
+    
+    /**
+     * Parses the style:mirror property
+     *
+     * @param string $name
+     * @param string $value
+     * @param boolean $important
+     * @return string
+     * @access private
+     */
+    private function _parseMirror($name, $value, $important = false)
+    {   
+        $style = '';
+        if ($value == 'horizontal' ||
+            $value == 'horizontal-on-even' ||
+            $value == 'horizontal-on-odd') {
+            $style = 'transform: scaleX(-1)';
+        } else if ($value == 'vertical') {
+            $style = 'transform: scaleY(-1)';
+        }
+        if (!empty($style) && $important) {
+            $style.= ' !important;';
+        } else if (!empty($style)) {
+            $style .= ';';
+        }
+        return $style;
+    }
+    
+    /**
+     * Parses the text-position property
+     *
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
+     * @access private
+     */
+    private function _parseTextPosition($name, $value, $important = false)
+    {   
+        $tmp = \explode(' ', \trim($value));
+        $pos = $tmp[0];
+        if(!empty($tmp[1])) {
+            $percentage = $tmp[1];
+        } else {
+            $percentage = '65%';
+        }
+        if ($pos == 'sub') {
+            return 'vertical-align: sub; font-size: ' . $percentage . ' !important;';
+        } else if ($pos == 'super') {
+            return 'vertical-align: super; font-size: ' . $percentage . ' !important;';
         }
     }
     
@@ -1740,7 +2591,21 @@ class ODF2HTML5
                 $float = 'left';
             }
             return 'float: ' . $float . ';';
-        }        
+        }         
+    }
+    
+    /**
+     * Generates an array that stores teh info related to teh clipping process
+     *
+     * @param DOMNode $node
+     * @return void
+     * @access private
+     */
+    private function _parseClip($node)
+    {
+        $clip = $node->getAttribute('fo:clip');
+        $name = $node->parentNode->getAttribute('style:name');
+        $this->_clippedImages[$name] = $clip;
     }
     
     /**
@@ -1764,7 +2629,7 @@ class ODF2HTML5
         $style = $node->getAttribute('style:style');
         if (empty($style)) {
             //TODO: check for available CSS values
-            $style = $defValues['style'];
+            $style = $values['style'];
         }
         $width = $node->getAttribute('style:width');
         if (empty($width)) {
@@ -1777,25 +2642,38 @@ class ODF2HTML5
     /**
      * Generates a line-height property
      *
-     * @param DOMNode $node
-     * @return void
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
      * @access private
      */
-    private function _parseLineHeight($name, $value)
+    private function _parseLineHeight($name, $value, $important = false)
     {   
         $temp = explode(':', $name);
         $prop = \array_pop($temp);
         $regex = '/([0-9\.\-]+)\s*(%)*/i';
         \preg_match($regex, $value, $matches);
         if (isset($matches[1]) && isset($matches[2])) {
-            $value = $matches[1]/100;
+            $value = \floatval($matches[1])/100;
+        }
+		$regex = '/([0-9\.\-]+)\s*(px|em|rem|ex|in|cm|mm|pt|pc)*/i';
+        \preg_match($regex, $value, $matches);
+        if (isset($matches[1]) && isset($matches[2])) {
+            $value = \floatval($this->_scaleLineHeight) * \floatval($matches[1]) . $matches[2];
+        }
+        $style = $prop . ': ' . $value;
+        if ($important) {
+            $style .= ' !important;';
+        } else {
+            $style .= ';';
         }
 
-        return $prop . ': ' . $value . ';';
+        return $style;
     }
     
     /**
-     * This method parses teh attributes of an ODF node and translates tehm into
+     * This method parses the attributes of an ODF node and translates tehm into
      * HTML5 attributes
      *
      * @param DOMNode $odfNode
@@ -1806,9 +2684,11 @@ class ODF2HTML5
     private function _parseODFAttributes($odfNode, $node)
     { 
         $odfTag = $odfNode->nodeName;
+        $removeNumbering = false;
         //check for master styles
         switch ($odfTag) {
             case 'text:a':
+            case 'draw:a':
                 $href = $odfNode->getAttribute('xlink:href');
                 $node->setAttribute('href', $href);
                 $target = $odfNode->getAttribute('office:target-frame-name');
@@ -1819,28 +2699,64 @@ class ODF2HTML5
                 break;
             case 'text:h':
                 $listHeader = $odfNode->getAttribute('text:is-list-header');
-                if ($listHeader === true) {
-                    //TODO
+                if ($listHeader == true) {
+                    $removeNumbering = true;
                 }
                 $restart = $odfNode->getAttribute('text:restart-numbering');
-                if ($restart === true) {
+                if ($restart == true) {
                     $num = $odfNode->getAttribute('text:start-value');
                     //TODO
+                    $reset = 'hh' . $odfNode->getAttribute('text:outline-level');
+                    $reset .= ' ' . (intval($num) - 1);
+                    $node->setAttribute('style', 'counter-reset:' . $reset);
                 }
             case 'text:p':
+            case 'text:numbered-paragraph':
             case 'text:span':
                 $class = "";
+                //because of the type of inheritance of ODF styles we should 
+                //check if the current span is the child of another span field
+                //and enforce style inheritance
+                $parentNode = $odfNode->parentNode;
+                if ($parentNode->nodeName == 'text:span') {
+                    $parentStyle = $parentNode->getAttribute('text:style-name');
+                    $parent = true;
+                    $class .= $parentStyle . ' ';
+                } else {
+                    $parent = false;
+                }
                 $classes = $odfNode->getAttribute('text:class-names');
                 if (!empty($classes)) {
                    $class .= $classes . ' ' ;
                 }
                 $style = $odfNode->getAttribute('text:style-name');
                 if (!empty($style)) {
-                   $class .= $style;
-                   $this->_check4MasterStyle($style);
+                    $class .= $style;
+                    //because of a LibreOffice bug we have to check that the
+                    //master style is not within a footnote because in that case
+                    //it should be ignored
+                    if ($parentNode->nodeName != 'text:note-body'){
+                        $this->_check4MasterStyle($style);
+                    }
                 }
                 if (!empty($class)) {
+                    if ($removeNumbering){
+                        $class .= ' removeNumbering ';
+                    }
                     $node->setAttribute('class', $this->_rep($class));
+                }
+                //when we have parent classes we should enforce the last span
+                //styles so we include a style attribute
+                if ($parent 
+                    && isset($this->_style['span.' . $style])) {
+                    //check that first child is a span node or a text node
+                    $fChild = $odfNode->firstChild;
+                    if (!empty($fChild) &&
+                        ($fChild->nodeName == 'text:span'
+                        || $fChild->nodeName == '#text')){
+                        $node->setAttribute('style', 
+                                            $this->_style['span.' . $style]);
+                    }
                 }
                 $id = $odfNode->getAttribute('xml:id');
                 if (!empty($id)) {
@@ -1867,15 +2783,24 @@ class ODF2HTML5
                 }
                 break;
             case 'table:table-cell':
+                $format = $odfNode->getAttribute('office:value-type');
+                if(!empty($format)){
+                    $node->setAttribute('data-type', $format);
+                }
                 $rows = $odfNode->getAttribute('table:number-rows-spanned');
                 if (!empty($rows)) {
                     $node->setAttribute('rowspan', $rows);
                 }
-                $cols = $odfNode->getAttribute('table:number-columns-spanned');
-                if (!empty($cols)) {
-                    $node->setAttribute('colspan', $cols);
+                $col = (int) $odfNode->getAttribute('table:number-columns-spanned');
+                $col += (int) $odfNode->getAttribute('table:number-columns-repeated');
+                if (!empty($col)) {
+                    $node->setAttribute('colspan', $col);
                 }
             case 'table:table':
+                $tableName = $odfNode->getAttribute('table:name');
+                if (!empty($tableName)) {
+                    $node->setAttribute('data-table-name', $tableName);
+                }
             case 'table:table-row':
                 $style = $odfNode->getAttribute('table:style-name');
                 if (!empty($style)) {
@@ -1889,14 +2814,24 @@ class ODF2HTML5
                 break;
             case 'table:table-column':
                 $st = $odfNode->getAttribute('table:default-cell-style-name');
+                $colWidth = array();
                 if (!empty($st)) {
                     $node->setAttribute('class', $this->_rep($st));
+                    $refStyle = $this->_style['td.' . $this->_rep($st)];
+                    $colWidth = $this->_getColWidth($refStyle);
                 }
                 //overwrite the default style if defined
                 $style = $odfNode->getAttribute('table:style-name');
                 if (!empty($style)) {
-                    $node->setAttribute('class', $this->_rep($style));
+                    $prevStyle = $node->getAttribute('class');
+                    $class = $prevStyle . ' ' . $this->_rep($style);
+                    $node->setAttribute('class', $class);
                     $this->_check4MasterStyle($style);
+                    $refStyle = $this->_style['col.' . $this->_rep($style)];
+                    $newColWidth = $this->_getColWidth($refStyle);
+                    if ($newColWidth[1] != 'undefined'){
+                        $colWidth = $newColWidth;
+                    }
                 }
                 $id = $odfNode->getAttribute('xml:id');
                 if (!empty($id)) {
@@ -1906,10 +2841,10 @@ class ODF2HTML5
                 if (!empty($cols)) {
                     $node->setAttribute('span', $cols);
                 }
+                $node->setAttribute('data-colwidth', $colWidth[0]);
+                $node->setAttribute('data-colwidthunits', $colWidth[1]);
                 break;
             case 'text:list':
-                //TODO: take into account text:continue-list and
-                //text:continue-numbering
                 $style = $odfNode->getAttribute('text:style-name');
                 if (!empty($style)) {
                     $node->setAttribute('class', $this->_rep($style));
@@ -1918,6 +2853,21 @@ class ODF2HTML5
                 $id = $odfNode->getAttribute('xml:id');
                 if (!empty($id)) {
                     $node->setAttribute('id', $id);
+                }
+                //take into account text:continue-list and
+                //text:continue-numbering
+                //Beware that although text:continue numbering is deprecated is
+                //the one currently used by Word and Libre/Open Office
+                $listName = $odfNode->getAttribute('text:parent-list');
+                $listDepth = $odfNode->getAttribute('text:list-depth');
+                $listCounter = $odfNode->getAttribute('text:list-counter');
+                $satt = $node->getAttribute('style');
+                $rcounter = 'counter-reset: ul' . $listName .'_';
+                $rcounter .= (int) $listDepth + 1;
+                $rcounter .= ' ' . $listCounter . ';';
+                $satt = $rcounter . $satt;
+                if (!empty($listName)) {
+                    $node->setAttribute('style', $satt);
                 }
                 break;
             case 'text:list-item':
@@ -1978,6 +2928,8 @@ class ODF2HTML5
                 
                 break;
             case 'draw:custom-shape':
+            case 'draw:connector':
+            case 'draw:line':
                 $style = $odfNode->getAttribute('draw:style-name');
                 $pStyle = 'position: relative; z-index: 100;';
                 $this->_style['div.' .$style . ' p'] = $pStyle;
@@ -1997,11 +2949,11 @@ class ODF2HTML5
                     //from top we remove top paddings ansd relocate childs
                     $regex = '/vertical-align:\s*([a-z]+)\s*!important;/';
                     $exp = $this->_style['div.' .$style];
-                    preg_match($regex, $exp, $matches);
+                    \preg_match($regex, $exp, $matches);
                     if (\count($matches) > 1) {
                         $va = $matches[1];
                         if ($va == 'middle') {
-                            $css = 'top: 50%; transform: translateY(-50%)';
+                            $css = 'top: 50%; transform: translateY(-50%);';
                             $this->_style['div.' .$style . ' p'] .= $css;
                             $regex = '/padding-top:\s*([a-z0-9\.]+)';
                             $regex .= '\s*!important;/';
@@ -2009,7 +2961,7 @@ class ODF2HTML5
                         } else if ($va == 'bottom') {
                             //we use the same css because if not muiltiline
                             //content may move out its containing box
-                            $css = 'top: 50%; transform: translateY(-50%)';
+                            $css = 'top: 50%; transform: translateY(-50%);';
                             $this->_style['div.' .$style . ' p'] .= $css;
                             $regex = '/padding-top:\s*([a-z0-9\.]+)';
                             $regex .= '\s*!important;/';
@@ -2020,14 +2972,12 @@ class ODF2HTML5
                     $this->_style['div.' .$style] = $exp;
                     //we need now to rescale the stroke width by a factor
                     //in order to show it properly in a browser
-                    $regex = '/stroke-width:\s*([0-9\.]*)([a-z]*)/';
-                    preg_match($regex, $exp, $matches);
-                    if (count($matches) > 2 
-                        && isset(self::$strokeScales[$style])) {
-                        $newDim = $matches[1] * self::$strokeScales[$style] 
-                                  * 1.5;
+                    $regex = '/stroke-width:\s*([0-9\.]*)([a-z !]*)/';
+                    \preg_match($regex, $exp, $matches);
+                    if (count($matches) > 2) {
+                        $newDim = $matches[1] *  1.5;
                         $replace = 'stroke-width: ' . $newDim . $matches[2];
-                        $exp = str_replace($matches[0], $replace, $exp);
+                        $exp = str_replace($matches[0], $replace, $exp);   
                     }
                     $this->_style['svg.' .$style] = $exp;
                     
@@ -2077,7 +3027,16 @@ class ODF2HTML5
                               'form:generic-control' => true,
                               'svg:desc' => true,
                               'svg:title' => true,
-                              /*'draw:g' => true*/);
+                              'dc:creator' => true,
+                              'dc:date' => true,
+                              'table:covered-table-cell' => true,
+                              'draw:connector' => true,
+                              'draw:line' => true,
+                              );
+        if (!$this->_SVG){
+            $stopOdfNodes['draw:g'] = true;
+            $stopOdfNodes['draw:custom-shape'] = true;
+        }
         //TODO: check all stop tags and take care of possible  body childs that 
         //are not to be parsed
         $odfTag = $odfNode->nodeName;
@@ -2111,10 +3070,13 @@ class ODF2HTML5
      */
     private function _parseODFProps($node, $style = '', $important = false)
     {
-        $parsedChilds = array('style:background-image' => true);
+        $parsedChilds = array('style:background-image' => true,
+                              'style:columns' => true);
         if ($node->hasAttributes()) {
             foreach ($node->attributes as $attr) {
                 $name = $attr->nodeName;
+                $val = $attr->nodeValue;
+                //$val = $attr->nodeValue;
                 $temp = \explode(':', $name);
                 $namespace = \array_shift($temp);
                 $arrayName = $namespace . '_' . 'attributes';
@@ -2123,23 +3085,24 @@ class ODF2HTML5
                 }
                 if (isset($prop[$name]) && \is_string($prop[$name])) {
                     $style .= $this->_filterProp($prop[$name],
-                                                 $attr->nodeValue,
+                                                 $val,
                                                  $important);
                 } else if (isset($prop[$name]) && \is_array($prop[$name])) {
                     if (isset($prop[$name]['name'])
                         && isset($prop[$name][$attr->nodeValue])) {
                        $style .= $prop[$name]['name'] . ': ' . 
-                                 $prop[$name][$attr->nodeValue] ;
+                                 $prop[$name][$val] ;
                        if ($important) {
                             $style .= ' !important;';
                         } else {
                             $style .= ';';
                         }
-                    } else if (isset($prop[$name]['method'])) {                        
-                        $style .= $this->$prop[$name]['method']($name,
-                                                    $attr->nodeValue); 
-                    } else if (isset($prop[$name]['composedProp'])) {                        
-                        $style .= $this->$prop[$name]['composedProp']($node); 
+                    } else if (isset($prop[$name]['method'])) { 
+                        $style .= $this->{$prop[$name]['method']}($name,
+                                          $val,
+                                          $important); 
+                    } else if (isset($prop[$name]['composedProp'])) {
+                        $style .= $this->{$prop[$name]['composedProp']}($node); 
                     }
                 }
             }
@@ -2150,17 +3113,27 @@ class ODF2HTML5
                if (isset($parsedChilds[$child->nodeName])) {
                    //TODO: take care of the path to the image that now
                    //will be broken
-                   $style = $this->_parseODFProps($child, $style);
-               } 
+                   $style = $this->_parseODFProps($child, $style, $important);
+               } else if ($child->nodeName == 'style:drop-cap') {
+                   $lines = $child->getAttribute('style:lines');
+                   $class = $node->parentNode
+                                 ->getAttribute('style:name');
+                   if (!empty($lines) && $lines != 1 && !empty($class)){
+                        $this->_dropcaps[$class] = $lines;
+                   }
+               }
             }
         }
         if ($node->nodeName == 'style:paragraph-properties') {
             //In the case of paragraph properties one should remove paddings
             //for borderless pargraphs because they are not rendered by
             //Word, Libre/Open Office
-            $style = $this->_clearPaddings($style);
+            //One also should take care of paragraph borders that are not 
+            //properly rendered in HTML for contiguous paragraphs
+            $class = $node->parentNode->getAttribute('style:name');
+            $style = $this->_repairParagraphStyles($style, $class);
         }
-
+        
         return $style;
     }
     
@@ -2178,16 +3151,99 @@ class ODF2HTML5
             $this->_parseODFStyleMaster($styleNode);
         } else if ($type == 'style:page-layout') {
             $this->_parseODFStyleLayout($styleNode);
-        }  else if ($type == 'text:list-style') {
+        } else if ($type == 'text:list-style') {
             $this->_parseODFStyleList($styleNode);
+        } else if ($type == 'text:outline-style') {
+            $this->_parseODFStyleOutline($styleNode);
+        } else if ($type == 'style:default-style') {
+            $this->_parseODFDefaultStyles($styleNode);
         } else {
             $this->_parseODFStyleGeneric($styleNode);
-        }
-        
+        }        
     }
     
     /**
-     * This method parses the list style nodes and their attributes
+     * This method parses the default document styles
+     *
+     * @param DOMNode $styleNode
+     * @return void
+     * @access private
+     */
+    private function _parseODFDefaultStyles($styleNode)
+    {
+        $tag = array ( 'table' => 'table',
+                       'table-row' => 'tr',
+                       'table-cell' => 'td, th',
+                       'paragraph' => 'p', 
+                       'section' => 'section'
+        );
+        
+        $type = $styleNode->getAttribute('style:family');
+        
+        if (!isset($tag[$type])) {
+            return;
+        } 
+        //let us now extract the properties from the different childs
+        $childs = $styleNode->childNodes;
+        foreach ($childs as $child) {
+            $prop = $child->nodeName;
+            if (isset(Resources::$style_childs[$prop])){
+                if ($type == 'paragraph') {
+                    if ($prop == 'style:paragraph-properties') {
+                        $base = 'p';
+                    } else if ($prop == 'style:text-properties') {
+                        $base = 'p span';
+                    } else {
+                        $base = 'none';
+                    }
+                } else if ($type == 'table') {
+                    if ($prop == 'style:paragraph-properties') {
+                        $base = 'table p';
+                    } else if ($prop == 'style:text-properties') {
+                        $base = 'table p span';
+                    } else if ($prop == 'style:table-properties') {
+                        $base = 'table';
+                    } else if ($prop == 'style:table-row-properties') {
+                        $base = 'table tr';
+                    } else if ($prop == 'style:table-cell-properties') {
+                        $base = 'table td, table th';
+                    } else {
+                        $base = 'none';
+                    }
+                } else if ($type == 'table-row') {
+                    if ($prop == 'style:paragraph-properties') {
+                        $base = 'table tr p';
+                    } else if ($prop == 'style:text-properties') {
+                        $base = 'table tr p span';
+                    } else if ($prop == 'style:table-row-properties') {
+                        $base = 'table tr';
+                    } else if ($prop == 'style:table-cell-properties') {
+                        $base = 'table tr td, table tr th';
+                    } else {
+                        $base = 'none';
+                    }
+                } else if ($type == 'table-cell') {
+                    if ($prop == 'style:paragraph-properties') {
+                        $base = 'table td p, table th p';
+                    } else if ($prop == 'style:text-properties') {
+                        $base = 'table td p span, table th p span';
+                    } else if ($prop == 'style:table-cell-properties') {
+                        $base = 'table td, table th';
+                    } else {
+                        $base = 'none';
+                    }
+                } else if ($type == 'section'){
+                    if ($prop == 'style:section-properties') {
+                        $base = 'div';
+                    }
+                }
+                $this->_defaultStyle[$base] = $this->_parseODFProps($child);
+            }            
+        }  
+    }
+    
+    /**
+     * This method parses the generic ODF styles
      *
      * @param DOMNode $styleNode
      * @return void
@@ -2204,7 +3260,6 @@ class ODF2HTML5
         } else {
             $tag = 'div';
         }
-        
         $class = $styleNode->getAttribute('style:name');
         if (!empty($class)) {
             $class = $this->_rep($class);
@@ -2221,7 +3276,7 @@ class ODF2HTML5
             $this->_parentStyle[$base] = $tag . '.' . $parent;
             $this->_style2style[$class] = $parent;
         }
-        
+
         //let us now extract the attributes from the different childs
         $childs = $styleNode->childNodes;
         foreach ($childs as $child) {
@@ -2245,6 +3300,21 @@ class ODF2HTML5
                                                                   '',
                                                                   true);
                 }
+                //let us look for col styles
+                if($tag == 'td' && isset(self::$colCellStyles[$class])) {
+                    foreach (self::$colCellStyles[$class] as $name => $val1){
+                        //only tds with no class inherit the col attributes in ODF
+                        $col = 'table.' . $name . ' tr td:not([class])';
+                        foreach(self::$colCellStyles[$class][$name] as $key => $val2){
+                            $col .= ':nth-child(' . $key . ')';
+                            if (isset($this->_style[$col])) {
+                                $this->_style[$col] .= $this->_parseODFProps($child);
+                            } else {
+                                $this->_style[$col] = $this->_parseODFProps($child);
+                            }
+                        }
+                    }
+                }
                 if (!empty($parent) /*&& empty($list)*/) {                   
                     //we need to map all possible styles to the parent
                     //even if they are not defined to assure proper inheritance
@@ -2267,13 +3337,11 @@ class ODF2HTML5
                     }
                 }
             }            
-        }  
-        /*if (!empty($list) && $tag == 'p') {
-            $this->_style[$base] .= 'display: table-cell;';
-        }*/
+        }
+        
     }
     
-     /**
+    /**
      * This method parses the attributes of generic/default style nodes
      *
      * @param DOMNode $styleNode
@@ -2290,9 +3358,6 @@ class ODF2HTML5
         } else {
             $base = $tag;            
         }
-        
-        //TODO: take into account the attr: text:consecutive-numbering
-        //<text:list-level-style-bullet>, <text:list-level-style-image> and <text:list-level-style-number>
 
         //let us now extract the attributes from the different childs
         $childs = $styleNode->childNodes;
@@ -2306,6 +3371,106 @@ class ODF2HTML5
                 $this->_parseODFStyleListImage($child, $base);
             }
         }  
+    }
+    
+    /**
+     * This method parses the outline styles
+     *
+     * @param DOMNode $styleNode
+     * @return void
+     * @access private
+     */
+    private function _parseODFStyleOutline($styleNode)
+    {
+        $childs = $styleNode->getElementsByTagName('outline-level-style');
+        $listStyleType = array();
+        foreach ($childs as $node) {
+            //get the list level
+            $level = $node->getAttribute('text:level');
+            //get the number format
+            $numFormat = $node->getAttribute('style:num-format');
+            if (empty($numFormat)) {
+                continue;
+            }
+            //list-style-type equivalences
+            $translate = array( '1' => 'decimal',
+                                'a' => 'lower-latin',
+                                'A' => 'upper-latin',
+                                'i' => 'lower-roman',
+                                'I' => 'upper-roman',
+                                );
+            if (!empty($numFormat) && isset($translate[$numFormat])) {
+                $listStyleType[$level] = $translate[$numFormat];
+            } else {
+                $listStyleType[$level] = 'decimal';
+            }
+            $suffix = $node->getAttribute('style:num-suffix');
+            if (empty($suffix)) {
+                $suffix = '.';
+            }
+            $prefix = $node->getAttribute('style:num-prefix');
+            $displayLevels = $node->getAttribute('text:display-levels');
+            if (empty($displayLevels)) {
+                $displayLevels = 1;
+            }
+            $style = '';
+            //in order to accomodate arbitrary numbering we are going to
+            //use the before pseudoclass 
+            $base = 'h' . $level;
+            $baseBefore = $base . ':before';
+            $this->_style[$base . ':first-of-type'] = 'counter-reset: ';
+            $this->_style[$base . ':first-of-type'] .= 'h' . $base . ';';
+            //reset lower level counters
+            $clean = 'counter-reset: ';
+            for ($k = $level +1; $k < 7; $k++) {
+                $clean .= 'hh' . $k . ' ';
+            }
+            $clean .= ';';
+            $this->_style[$base . ':not(:first-of-type)'] = $clean;
+            //set the style counters
+            $style .= 'counter-increment: h' . $base . ';';
+            if (!empty($prefix)) {
+                $style .= 'content: "' . $prefix . '" ';    
+            } else {
+                $style .= 'content: ';
+            }
+            $j_0 = (int) $level - (int) $displayLevels + 1;
+            for ($j = $j_0; $j <= $level; $j++) {
+                if (isset($listStyleType[$j])) {
+                    $style .= 'counter(hh'. $j . ', ' . $listStyleType[$j].') ';
+                    if ($j == $level && !empty($prefix) && $prefix != ' ') {
+                        $style .= ' "' .$suffix . '\00a0 ";';
+                    } else if ($j == $level) {
+                        $style .= ' "' .$suffix . ' ";';
+                    } else {
+                        $style .= ' "' .$suffix . '" ';
+                    }
+                }
+            }
+
+            //now extract the styling info for the numbered items
+            $childs = $node->childNodes;
+            foreach ($childs as $child) { 
+                $name = $child->nodeName;
+                if ($name == 'style:list-level-properties'
+                    && $child->hasChildNodes()) {
+                    $mL = $child->firstChild->getAttribute('fo:margin-left');
+
+                    if (!empty($mL)){
+                        $hstyle = 'margin-left: ' . $mL . ';';
+                        $this->_style[$base] = $hstyle;
+                    } 
+                    $tI = $child->firstChild->getAttribute('fo:text-indent');                      
+                }
+                $style .= 'display: inline-block;';
+                $style .= 'margin-left:' . $tI . ';';
+                $style .= 'min-width: ' . self::reverseSign($tI) . ';';
+                $this->_style[$baseBefore] = $style;
+                if (!empty($parentStyle)) {
+                    $this->_parentStyle[$baseBefore] = $parentStyle;
+                }
+            }           
+        } 
     }
     
     /**
@@ -2329,11 +3494,13 @@ class ODF2HTML5
         //at the ul level
         $baseUL = $base;
         $baseLI = $base . ' li';
+        $recount = str_replace('.', '', $base);
         if ($level == 1) {
             $this->_style[$baseUL] = 'margin-left: 0;';
             $this->_style[$baseUL] .= 'padding: 0; list-style-type: none;';
         }
         $baseLIBefore = $base . ' li:before';
+        
         for ($j = 1; $j < $level; $j++) {
             $baseLI .= ' ul li';
         }
@@ -2350,13 +3517,19 @@ class ODF2HTML5
             } else if ($content == '"\f0b7"') {
                 $content = '"\2022"';
                 $style = 'content: ' . $content . ';';
-                $style .= 'font-family: Verdana !important;';
+                //$style .= 'font-family: Verdana !important;';
+                $style .= 'font-family: Verdana;';
             } else {
                 $style = 'content: ' . $content . ';';
             }
         } else {
             $style = '';
         }
+        //set the style counters
+        //even if this (sub)list is not numbered this bullets may be nested 
+        //within a nuembered list and we should make sure that numbering
+        //for the container list is not incremented
+        $style .= 'counter-increment: ' . $recount . '_' . $level . ';';
         
         //now extract the styling info for the list items
         $childs = $node->childNodes;
@@ -2386,11 +3559,41 @@ class ODF2HTML5
                 if (!empty($tI)) {
                     $this->_style[$baseLI] .= 'text-indent: ' .$tI . ';';
                     $style .= 'margin-left: ' .$tI . ';';
-                    //$pR = \str_replace('-', '', $tI);
-                    //$style .= 'padding-right: ' . $pR. '; ';
+                }           
+            } else if ($name == 'style:list-level-properties'
+                && !$child->hasChildNodes()){
+                //the properties are set like
+                //text-indent: text:min-label-width
+                //margin-left: text:space-before
+                $mL = $child->getAttribute('text:space-before');
+                //we have to remove the margin-left because in CSS the margins
+                //of nested li elements add up and this is not the standard
+                //ODF behaviour
+                if (!empty($mL)){
+                    $ulStyle = 'margin-left: -' . $mL . ';';
+                } else {
+                    $ulStyle = 'margin-left: 0;';
                 }
-                $style .= 'display: table-cell;';            
+                $ulStyle .= 'padding: 0; list-style-type: none;';
+                $this->_style[$baseUL] = $ulStyle;
+                //build the li style
+                $this->_style[$baseLI] = '';
+                
+                $tI = $child->getAttribute('text:min-label-width');
+                if (!empty($tI)) {
+                    $this->_style[$baseLI] .= 'text-indent: -' .$tI . ';';
+                    $style .= 'margin-left: -' .$tI . ';';
+                }
+                if (!empty($mL)) {
+                    if (empty($tI)){
+                      $marginLeft = $mL;
+                    } else {
+                      $marginLeft = self::sum(array($mL, $tI), 'pt', false); 
+                    }
+                    $this->_style[$baseLI] .= 'margin-left: ' . $marginLeft . ';';
+                }
             }
+            $style .= 'display: table-cell;';
             $this->_style[$baseLIBefore] = $style;
             if (!empty($parentStyle)) {
                 $this->_parentStyle[$baseLIBefore] = $parentStyle;
@@ -2484,9 +3687,9 @@ class ODF2HTML5
                     $style .= 'margin-left: ' .$tI . ';';
                     //$pR = \str_replace('-', '', $tI);
                     //$style .= 'padding-right: ' . $pR. '; ';
-                }
-                $style .= 'display: table-cell;';            
-            }
+                }           
+            } 
+            $style .= 'display: table-cell;'; 
             $this->_style[$baseLIBefore] = $style;
             if (!empty($parentStyle)) {
                 $this->_parentStyle[$baseLIBefore] = $parentStyle;
@@ -2542,10 +3745,12 @@ class ODF2HTML5
         //at the ul level
         $baseUL = $base;
         $baseLI = $base . ' li';
+        $recount = str_replace('.', '', $base);
         if ($level == 1) {
-            $this->_style[$baseUL] = 'counter-reset: level_1;';
+            $this->_style[$baseUL] = 'counter-reset: ' . $recount .'_1;';
             $this->_style[$baseUL] .= 'margin-left: 0;';
             $this->_style[$baseUL] .= 'padding: 0; list-style-type: none;';
+            //$this->_style[$baseUL . ' ~ ' . $baseUL] = 'counter-reset: none !important; ';
         }
         $baseLIBefore = $base . ' li:before';
         for ($j = 1; $j < $level; $j++) {
@@ -2556,15 +3761,15 @@ class ODF2HTML5
         }
         $baseLIBefore = $baseLI . ':before';
         //set the style counters
-        $style .= 'counter-increment: level_' . $level . ';';
+        $style .= 'counter-increment: ' . $recount . '_' . $level . ';';
         if (!empty($prefix)) {
             $style .= 'content: "' . $prefix . '" ';    
         } else {
             $style .= 'content: ';
         }
-        $j_0 = $level - $displayLevels + 1;
+        $j_0 = (int) $level - (int) $displayLevels + 1;
         for ($j = $j_0; $j <= $level; $j++) {
-            $style .= 'counter(level_' . $j . ', ' . $listStyleType. ') ';
+            $style .= 'counter(' . $recount . '_' . $j . ', ' . $listStyleType. ') ';
             if ($j == $level && !empty($prefix) && $prefix != ' ') {
                 $style .= ' "' .$suffix . '\00a0 ";';
             } else if ($j == $level) {
@@ -2587,28 +3792,63 @@ class ODF2HTML5
                 //of nested li elements add up and this is not the standard
                 //ODF behaviour
                 if (!empty($mL)){
+                    /*if(strpos($mL, '-') == 0){
+                        //remove the minus sign
+                        //$mL = substr($mL, 1);
+                        $mL = 0;
+                    } else {
+                        $mL = '-' . $mL;
+                    }*/
                     $ulStyle = 'margin-left: -' . $mL . ';';
                 } else {
                     $ulStyle = 'margin-left: 0;';
                 }
                 $ulStyle .= 'padding: 0; list-style-type: none;';
-                $this->_style[$baseUL] = 'counter-reset: level_';
-                $this->_style[$baseUL] .= ($level + 1) . ';';
+                $this->_style[$baseUL] = 'counter-reset: ' . $recount .'_';
+                $this->_style[$baseUL] .= ((int) $level + 1) . ';';
                 $this->_style[$baseUL] .= $ulStyle;
                 //build the li style
                 $this->_style[$baseLI] = '';
+                $tI = $child->firstChild->getAttribute('fo:text-indent');
                 if (!empty($mL)) {
                     $this->_style[$baseLI] .= 'margin-left: ' . $mL . ';';
-                }
-                $tI = $child->firstChild->getAttribute('fo:text-indent');
-                if (!empty($tI)) {
-                    $this->_style[$baseLI] .= 'text-indent: ' .$tI . ';';
+                } 
+                if (!empty($tI) ) {
                     $style .= 'margin-left: ' .$tI . ';';
-                    //$pR = \str_replace('-', '', $tI);
-                    //$style .= 'padding-right: ' . $pR. '; ';
+                    $this->_style[$baseLI] .= 'text-indent: ' .$tI . ';';
+                }           
+            } else if ($name == 'style:list-level-properties'
+                && !$child->hasChildNodes()) {
+                $mL = $child->getAttribute('text:space-before');
+                //we have to remove the margin-left because in CSS the margins
+                //of nested li elements add up and this is not the standard
+                //ODF behaviour
+                if (!empty($mL)){
+                    $ulStyle = 'margin-left: -' . $mL . ';';
+                } else {
+                    $ulStyle = 'margin-left: 0;';
                 }
-                $style .= 'display: table-cell;';            
+                $ulStyle .= 'padding: 0; list-style-type: none;';
+                $this->_style[$baseUL] = 'counter-reset: ' . $recount .'_';
+                $this->_style[$baseUL] .= ((int) $level + 1) . ';';
+                $this->_style[$baseUL] .= $ulStyle;
+                //build the li style
+                $this->_style[$baseLI] = '';
+                $tI = $child->getAttribute('text:min-label-width');
+                if (!empty($tI)) {
+                    $this->_style[$baseLI] .= 'text-indent: -' .$tI . ';';
+                    $style .= 'margin-left: -' . $tI . ';';
+                }
+                if (!empty($mL)) {
+                    if (empty($tI)){
+                      $marginLeft = $mL;
+                    } else {
+                      $marginLeft = self::sum(array($mL, $tI), 'pt', false); 
+                    }
+                    $this->_style[$baseLI] .= 'margin-left: ' . $marginLeft . ';';
+                }
             }
+            $style .= 'display: table-cell;'; 
             $this->_style[$baseLIBefore] = $style;
             if (!empty($parentStyle)) {
                 $this->_parentStyle[$baseLIBefore] = $parentStyle;
@@ -2660,15 +3900,6 @@ class ODF2HTML5
                     break;
             }
         }
-        
-        //var_dump($this->_pageStyle);
-        /*
-         <style:page-layout style:name="PL0">
-            <style:page-layout-properties style:writing-mode="lr-tb" fo:margin-left="0.7875in" fo:margin-bottom="0.7875in" fo:margin-top="0.7875in" style:num-format="1" fo:margin-right="0.7875in" style:print-orientation="portrait" fo:page-height="11.693in" fo:page-width="8.268in">
-                <style:footnote-sep style:adjustment="left" style:line-style="solid" style:color="#000000" style:rel-width="33%" style:width="0.007in"/>
-            </style:page-layout-properties>
-
-        </style:page-layout>*/
     }
     
     /**
@@ -2689,6 +3920,7 @@ class ODF2HTML5
         //this master style
         $xpath = $this->_xpath;
         $query = '//style:style[@style:master-page-name="' . $master .'"]';
+        $query .= ' | //style:style[@style:parent-style-name="' . $master .'"]';
         $sNodes = $xpath->query($query);
         foreach ($sNodes as $sNode) {
             $sName = $sNode->getAttribute('style:name');
@@ -2709,40 +3941,65 @@ class ODF2HTML5
         //TODO: take into account the next-style-name attribute!!!
         //although the problem is that it is only used when the page is
         //filled and we can not control that :-(
-
-        $this->_parseHeaderFooter($styleNode, $master, 'header');
-        $this->_parseHeaderFooter($styleNode, $master, 'footer');
-        
-        //footers
+        if ($this->_docType != 'spreadsheet') {
+            $this->_parseHeaderFooter($styleNode, $master, 'header');
+            $this->_parseHeaderFooter($styleNode, $master, 'footer');
+        }
     }
+    
     
     /**
      * Parses the opacity properties
      *
      * @param string $name
      * @param string $value
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseOpacity($name, $value)
+    private function _parseOpacity($name, $value, $important = false)
     {   
         $val = \trim(\str_replace('%', '', $value));
         $val = $val/100;
         if ($name == 'svg:stroke-opacity') {
-            return 'stroke-opacity: ' . $val . ';';
+            $style = 'stroke-opacity: ' . $val;
         } else if ($name == 'draw:opacity') {
-            return 'fill-opacity: ' . $val . ';';
+            $style = 'fill-opacity: ' . $val;
+        }
+        if ($important) {
+            $style .= ' !important;';
+        } else {
+            $style .= ';';
+        }
+        return $style;
+    }
+    
+    /**
+     * position absolutely a frame depending on the props: style:run-thrugh
+     * and style:flow-with-text
+     *
+     * @param DOMNode $node
+     * @return string
+     * @access private
+     */
+    private function _parseRunThrough($node)
+    {   
+        $flow = $node->getAttribute('style:horizontal-pos');
+        if (empty($flow)){
+            return 'position: absolute;';
         }
     }
     
     /**
      * Parses the background image path
      *
-     * @param string $src
+     * @param string $name
+     * @param string $value
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseSVGBackgroundImage($name, $value)
+    private function _parseSVGBackgroundImage($name, $value, $important = false)
     {   
         if (isset($this->_backImages[$value])) {
             $bg = $this->_imagePath($this->_backImages[$value], true);
@@ -2754,22 +4011,74 @@ class ODF2HTML5
      * Leaves a mark to later remove left padding for elements that are 
      * horizontally aligned in SVG
      *
-     * @param string $src
+     * @param string $name
+     * @param string $value
+     * @param bool $important
      * @return string
      * @access private
      */
-    private function _parseTAH($name, $value)
+    private function _parseTAH($name, $value, $important = false)
     {   
         if ($value != 'left') {
             return 'rpl;';
+        } else {
+            //the following collides with horizontal positioning
+            //return 'float: left !important;';
         }
     }
     
     /**
-     * takes acre of wrapping in frames
+     * Generates a text-align property
+     *
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
+     * @access private
+     */
+    private function _parseTextAlign($name, $value, $important = false)
+    {   
+        $temp = explode(':', $name);
+        $prop = \array_pop($temp);
+        if ($value == 'end') {
+            $value = 'right';
+        } else if ($value == 'start') {
+            $value = 'left';
+        }
+
+        $style = $prop . ': ' . $value;
+        if ($important) {
+            $style .= ' !important;';
+        } else {
+            $style .= ';';
+        }
+        return $style;
+    }
+    
+    /**
+     * Chosses the font color depending on the background
      *
      * @param DOMNode $node
-     * @return void
+     * @return string
+     * @access private
+     */
+    private function _parseWindowFont($node)
+    {   
+        $value = $node->getAttribute('style:use-window-font-color');
+        //We ignore this property if it is not an automatic style
+        $type = $node->parentNode->parentNode->nodeName;
+        //We set it to initial assuming is already set respect the
+        //background
+        if ($value == 'true' && $type == 'office:automatic-styles') {
+            return 'color: initial !important;';
+        }
+    }
+    
+    /**
+     * takes care of wrapping in frames
+     *
+     * @param DOMNode $node
+     * @return string
      * @access private
      */
     private function _parseWrap($node)
@@ -2792,6 +4101,270 @@ class ODF2HTML5
     }
     
     /**
+     * takes care of writting mode (RTL)
+     *
+     * @param DOMNode $node
+     * @return string
+     * @access private
+     */
+    private function _parseWritingMode($node)
+    {
+        $wmode = $node->getAttribute('style:writing-mode');
+        $style = 'writing-mode: ' . $wmode . ';';
+        $direction = explode('-', $wmode);
+        if ($direction[0] == 'rl' || $direction[0] == 'rl' || $wmode == 'rl') {
+           $style .= 'direction: rtl;';
+           //we need also to check if there is a text-align with value "start"
+           //or end that is not recognised by IE
+           $ta = $node->getAttribute('fo:text-align');
+           if ($ta == 'start' || empty($ta)) {
+               $style .= 'text-align: right !important;';
+           } else if ($ta == 'end') {
+               $style .= 'text-align: left !important;';
+           }
+        }
+        return $style;
+    }
+    
+    /**
+     * Parses the document col styles
+     *
+     * @return void
+     * @access private
+     */
+    private function _preParseColCellStyles ()
+    {
+        //get all the col cell default styles
+        $query = '//table:table';
+        $query .= '[//table:table-column[@table:default-cell-style-name]]';
+        $tables = $this->_xpath->query($query);
+        foreach ($tables as $table) {
+            $name = $table->getAttribute('table:style-name');
+            $cols = $table->getElementsByTagName('table-column');
+            $counter = 1;
+            if (!empty($name) && $cols->length > 0) {
+                foreach ($cols as $col) {
+                    $key = $col->getAttribute('table:default-cell-style-name');
+                    $val = $col->getAttribute('table:style-name');
+                    self::$colCellStyles[$key][$name][$counter] = $val;
+                    $counter++;
+                }
+            }
+        }
+    }
+    
+    /**
+     * Parses for special services like youtube video and/or google forms
+     *
+     * @return void
+     * @access private
+     */
+    private function _preParse4Services ()
+    {
+        //first get all links
+        $query = '//text:a';
+        $links = $this->_xpath->query($query);
+        foreach ($links as $link){
+            $str = $link->getAttribute('xlink:href');
+            foreach ($this->_services as $key => $value){
+                $initial = stripos($str, $key);
+                if ($initial !== false){
+                    $this->_preParseLinkParagraph($link);
+                    break;
+                }
+            }
+        }
+    }
+    
+    /**
+     * Removes additional content in paragraphs with links to services
+     *
+     * @param DOMNode $link
+     * @return void
+     * @access private
+     */
+    private function _preParseLinkParagraph ($link)
+    {
+        //get the URL
+        $url = $link->getAttribute('xlink:href');
+        //get the span style
+        $spans = $link->getElementsByTagName('span');
+        if ($spans->length > 0){
+            $style = $spans->item(0)->getAttribute('text:style-name');
+        } else {
+            $style = '';
+        }
+        //get the parent paragraph if any
+        $query = 'ancestor::text:p';
+        $ps = $this->_xpath->query($query, $link);
+        if ($ps->length > 0){
+            $p = $ps->item(0);
+            //we should get all bookmark nodes
+            $query = './/text:bookmark';
+            $bmNodes = $this->_xpath->query($query, $p);
+            $query = './/text:bookmark-start';
+            $startNodes = $this->_xpath->query($query, $p);
+            $query = './/text:bookmark-end';
+            $endNodes = $this->_xpath->query($query, $p);
+            //empty the node
+            while ($p->hasChildNodes()) {
+                $p->removeChild($p->firstChild);
+            }
+            //create a span node
+            $url = str_replace('&', '&amp;', $url);
+            $url = str_replace('%25', '%', $url);
+            $sp = $link->ownerDocument->createElement('text:span', $url);
+            $sp->setAttribute('text:style-name', $style);
+            //create a text:a node
+            $a = $link->ownerDocument->createElement('text:a');
+            $a->setAttribute('xlink:href', $url);
+            $a->appendChild($sp);
+            //append it to the $p node but taking care of possible bookmarks
+            foreach($startNodes as $node){
+                $bm = $link->ownerDocument->createElement('text:bookmark-start');
+                $ns = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+                $attr = $node->getAttributeNS($ns, 'name');
+                $bm->setAttributeNS($ns, 'text:name', $attr);
+                $p->appendChild($bm);
+            }
+            foreach($bmNodes as $node){
+                $bm = $link->ownerDocument->createElement('text:bookmark');
+                $ns = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+                $attr = $node->getAttributeNS($ns, 'name');
+                $bm->setAttributeNS($ns, 'text:name', $attr);
+                $p->appendChild($bm);
+            }
+            //insert the links
+            $p->appendChild($a);
+            //pending bookmarks
+            foreach($endNodes as $node){
+                $bm = $link->ownerDocument->createElement('text:bookmark-end');
+                $ns = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+                $attr = $node->getAttributeNS($ns, 'name');
+                $bm->setAttributeNS($ns, 'text:name', $attr);
+                $p->appendChild($bm);
+            }
+        }
+    }
+    
+    /**
+     * Parses the document lists to allow for continuing numbering
+     *
+     * @return void
+     * @access private
+     */
+    private function _preParseLists ()
+    {
+        $spath = new \DOMXPath($this->_dom['styles.xml']);
+        //get all the lists included in the document
+        $query = '//text:list[@text:style-name]';
+        $lists = $this->_xpath->query($query);
+        $found = array();
+        foreach ($lists as $list) {
+            $listName = $list->getAttribute('text:style-name');
+            $continue = $list->getAttribute('text:continue-numbering');
+            $continue2 = $list->getAttribute('text:continue-list');
+            //define a level array
+            $listOffset = array(0,0,0,0,0,0,0,0,0,0);
+            //look for offsets in the list definition
+            $qOffset = '//text:list-style[@style:name="'. $listName . '"]';
+            $qOffset .= '/text:list-level-style-number';
+            $nStyles = $this->_xpath->query($qOffset);
+            $soff = 0;
+            $listDepth = 0;
+            if (!isset($found[$listName])){
+                //this is the first appearance of this list and we have to check
+                //that there is no jump in level that scramble the numbering
+                $found[$listName] = true;
+                $listDepth = $this->_computeListDepth($list);
+                if ($listDepth > 0){
+                    $soff = 1;
+                } 
+            }
+            if ($nStyles->length == 0){
+                //the style definition is in the styles.xml file
+                $nStyles = $spath->query($qOffset);
+            }
+            foreach ($nStyles as $nStyle) {
+                $tlevel = $nStyle->getAttribute('text:level');
+                $tstart = $nStyle->getAttribute('text:start-value');
+                if (!empty($tstart) && !empty($tlevel) && $tlevel <= $listDepth) {   
+                    $listOffset[$tlevel - 1] = $tstart -1 + $soff;
+                } else if (!empty($tstart) && !empty($tlevel)) {
+                    $listOffset[$tlevel - 1] = $tstart -1;
+                } else if (empty($tstart) && !empty($tlevel) && $tlevel <= $listDepth){
+                    $listOffset[$tlevel - 1] = $soff;
+                }
+            }
+
+            if ($continue == 'true' || !empty($continue2)) {
+                if (!isset(self::$listLevel[$listName])) {
+                    self::$listLevel[$listName] = $listOffset;
+                } else {
+                    self::$listLevel[$listName][0];
+                }
+                $list->setAttribute('text:parent-list', $listName);
+                $list->setAttribute('text:list-depth', 0);
+                $list->setAttribute('text:list-counter', 
+                    self::$listLevel[$listName][0]);
+                $this->_tagList($listName, $list, 0);
+            } else {
+                self::$listLevel[$listName] = $listOffset;
+                
+                $this->_tagList($listName, $list, 0);
+            }
+        }
+    }
+    
+    /**
+     * Insert additional attributes
+     *
+     * @param string $name
+     * @param DOMNode $list
+     * @param integer $level
+     * @return void
+     * @access private
+     */
+    private function _tagList ($name, $list, $level=0, $counter=0)
+    {
+        $items = $list->childNodes;
+        foreach ($items as $item) {
+            $nodeName = $item->nodeName;
+            if ($nodeName == 'text:list-item') {
+                $subItems = $item->childNodes;
+                $subcounter = 0;
+                $offset = (int) $item->getAttribute('text:start-value');
+                foreach ($subItems as $subItem) {
+                    if ($subItem->nodeName == 'text:list') {
+                        $this->_tagList($name, $subItem, $level + 1);
+                    } else {
+                        if (!empty($offset)) {
+                            $subcounter = $offset;
+                        } else {
+                            $subcounter = 1;
+                        }
+                        if ($subcounter > 0) {
+                        //all lower levels have to be reset to zero
+                        for ($j = $level + 1; $j < 11; $j++ ) {
+                                self::$listLevel[$name][$j] = 0;
+                            }
+                        }
+                    }  
+                }
+                $counter += $subcounter;
+            }
+        }
+        $list->setAttribute('text:parent-list', $name);
+        $list->setAttribute('text:list-depth', $level);
+        $list->setAttribute('text:list-counter', 
+                            self::$listLevel[$name][$level]);
+        
+        self::$listLevel[$name][$level] += $counter;
+        
+        
+    }
+    
+    /**
      * This method renders the HTML
      *
      * @param array $options
@@ -2801,7 +4374,8 @@ class ODF2HTML5
     public function renderHTML($options = array())
     {     
         // CSS   
-        //Take into account parent styles inheritance
+        //Take into account parent styles inheritance that was not taken into
+        //account after the first parent style merging
         $this->_mergeParentStyles();    
         //include default page styles;
         $this->_CSS .= $this->_externalCSS .PHP_EOL;
@@ -2811,38 +4385,53 @@ class ODF2HTML5
                 //rendering
                 $css = $value['page'];
                 $this->_CSS .= 'div#' . $this->_prefix . 'div.' . $key . ' {' . $css . '}' . PHP_EOL; 
+				$width = self::extractSingleProperty('data-width', $css);
+                if (!empty($width)) {
+                    $w = 'width: ' . $width .';';
+                    $this->_CSS .= '.h5p_page_'. $key .' {' . $w . '}' .PHP_EOL;
+                } 
             }
-            $width = self::extractSingleProperty('data-width', $css);
-            if (!empty($width)) {
-                $w = 'width: ' . $width .';';
-                $this->_CSS .= '.h5p_page_'. $key .' {' . $w . '}' .PHP_EOL;
-            } 
         }
-
         foreach ($this->_style as $key => $value) {
             $posFontSize = \strpos($value, 'font-size:');
-            if ($posFontSize === false && isset($this->_defaultFontSize)) {
+            $before = \strpos($key, ':before');
+            if ($posFontSize === false 
+                && $before == false
+                && isset($this->_defaultFontSize)) {
+                $value .= 'font-size: ' . $this->_defaultFontSize . ';';
+            }
+            $this->_CSS .= ' div#' . $this->_prefix . $key . ' {' . $value . '}' . PHP_EOL; 
+        }
+        foreach ($this->_defaultStyle as $key => $value) {
+            $posFontSize = \strpos($value, 'font-size:');
+            $before = \strpos($key, ':before');
+            if ($posFontSize === false 
+                && $before == false
+                && isset($this->_defaultFontSize)) {
                 $value .= 'font-size: ' . $this->_defaultFontSize . ';';
             }
             $this->_CSS .= ' div#' . $this->_prefix  . $key . ' {' . $value . '}' . PHP_EOL; 
         }
-        $html = '';
+        if ($this->_math) {
+            $html = '<html xmlns:mml="http://www.w3.org/1998/Math/MathML" xmlns:default="http://www.w3.org/1998/Math/MathML">' . PHP_EOL;
+        } else {
+            $html = '';
+        }
+		
 
         if ($this->_singleFile) {
-            $html .= '<style>' . PHP_EOL . $this->_CSS . PHP_EOL . '</style>';
+            $html .= '<style>' . PHP_EOL . $this->_CSS . PHP_EOL . '</style>' . PHP_EOL;
         } else {
             if (\file_exists($this->_path['filename'] . '-styles') === false) {
                 //create the folder
                 \mkdir($this->_path['filename'] . '-styles');
             }
-            //copy there the css data
-            $path = $this->_path['filename'] . '-styles/style.css';
-            $fp = \fopen($path, 'w');
-            \fwrite($fp, $this->_CSS);
-            \fclose($fp);
-            //create the link to the CSS file
-            $html .= '<link href="' . $path . '" rel="stylesheet"/>' . PHP_EOL;
-        }       
+        }  
+        if ($this->_math) {
+			$mathCSS = \file_get_contents(dirname(__FILE__) . '/MathJax.css');
+			$mathCSS = str_replace ('.h5p_page', ' div#' . $this->_prefix . ' section.h5p_page', $mathCSS);
+            $html .= $mathCSS;
+        }
         
         //HTML
         
@@ -2852,26 +4441,39 @@ class ODF2HTML5
         $layout =& $this->_masterLayout;
         foreach ($this->_HTML as $key => $value) {
             //get the master style
-            if (isset($value['master'])) {
+            //we have to hack the fact that whenever $k > 0 the standard page 
+            //layout because when one changes from Word to Libre Office or 
+            //Open Office spurious sections may pop out: unfortunately this may 
+            //be implementation dependedant
+            if (isset($value['master']) && ($value['master'] != 'Standard' || $k == 0)) {
                 $master = $value['master'];    
             } else {
                 $master = $currentMaster;
             }
+            if ($k == 0 && empty($master) && empty($currentMaster)){
+                $l = count($this->_HTML);
+                for ($p = 1; $p < $l; $p++) {
+                    if (!empty($this->_HTML[$p]['master'])) {
+                        $master = $this->_HTML[$p]['master'];
+                        break;
+                    }
+                }
+            }
             if ($master !== $currentMaster) {
                 if ($k > 0) {
-                    if (!empty($layout[$master]['footer'])) {
-                        $div->appendChild($layout[$master]['footer']);
+                    if (!empty($layout[$currentMaster]['footer'])) {
+                        $div->appendChild($layout[$currentMaster]['footer']);
                     }
                     $this->_body->documentElement->appendChild($section);
                 }
                 $section = $this->_body->createElement('section');
                 $section->setAttribute('id', 'section_' . $k);
                 if (isset($layout[$master]['layout'])) {
-                    $class = 'h5p_page h5p_page_' . $layout[$master]['layout'];
+                    $class = 'h5p_layout h5p_page h5p_page_' . $layout[$master]['layout'];
                 } else if (isset($layout['default'])) {
-                    $class = 'h5p_page h5p_page_' . $layout['default'];
+                    $class = 'h5p_layout h5p_page h5p_page_' . $layout['default'];
                 } else {
-                    $class = 'h5p_page';
+                    $class = 'h5p_layout h5p_page';
                 }
                 $section->setAttribute('class', $class);
                 $div = $this->_body->createElement('div');
@@ -2889,51 +4491,117 @@ class ODF2HTML5
                     $div->appendChild($layout[$master]['header']);
                 }
                 $currentMaster = $master;
-            }  
-            $div->appendChild($value['xml']);
+            } 
+            if (empty($div)) {
+                $section = $this->_body->createElement('section');
+                $section->setAttribute('id', 'section_' . $k);
+                $class = 'h5p_layout h5p_page';
+                $section->setAttribute('class', $class);
+                $div = $this->_body->createElement('div');
+                $div->setAttribute('class', 'h5p_default_layout');
+                $div->appendChild($value['xml']);
+                $section->appendChild($div);
+                $this->_body->documentElement->appendChild($section);
+            } else {
+                $div->appendChild($value['xml']);
+            }
             $k++;
         }
         //take into account the last section that is not properly handle in the
         //loop
         if (\count($this->_footnotes)  > 0 
-            || \count($this->_endnotes) > 0) {
+            || \count($this->_endnotes) > 0
+            || \count($this->_comments) > 0) {
                 $this->_appendNotes($div);
             }
         if (!empty($layout[$master]['footer'])) {
             $div->appendChild($layout[$master]['footer']);
         }
-        $this->_body->documentElement->appendChild($section);
+        if (!empty($section)) {
+            $this->_body->documentElement->appendChild($section);
+        }
         //take now into account the scripts
+        $addScripts = '';
         if (\count($this->_charts)){
             //TODO: load the javascript and CSS in a proper way :-)
-            $addScripts = '<style>';
-			$c3CSS = \file_get_contents(dirname(__FILE__) . ' /../../lib/vendor/js/c3.css');
+            $addScripts .= '<style>';
+			$c3CSS = \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/c3.css');
 			$c3CSS = \str_replace('.h5p_page', 'div#' . $this->_prefix . ' .h5p_page', $c3CSS);
             $addScripts .= $c3CSS;
             $addScripts .= '</style>';
             $addScripts .= '<script>';
-            $addScripts .= \file_get_contents(dirname(__FILE__) . ' /../../lib/vendor/js/c3.js');
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/c3.js');
             $addScripts .= '</script>';
             $addScripts .= '<script>';
-            $addScripts .= \file_get_contents(dirname(__FILE__) . ' /../../lib/vendor/js/d3.js');
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/d3.js');
             $addScripts .= '</script>';
             foreach ($this->_charts as $chart) {
                 $addScripts .= $chart;
             }
         }
+        if (\count($this->_comments)){
+            $addScripts .= '<style>';
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/jquery.webui-popover.css');
+            $addScripts .= '</style>';
+            $addScripts .= '<script>' . PHP_EOL;
+            $addScripts .= '(function( $ ) {' . PHP_EOL;
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/jquery.webui-popover.min.js');
+            foreach ($this->_comments as $comment) {
+                $addScripts .= $comment['script'];
+            }
+            $addScripts .= '})(jQuery);';
+            $addScripts .= '</script>';
+        }
+        if ($this->_tabs) {
+            $addScripts .= '<script>';
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/tabs.js');
+            $addScripts .= '</script>';    
+        }
+        if (\count($this->_dropcaps) > 0) {
+            $addScripts .= '<script>';
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/dropcaps.js');
+            foreach($this->_dropcaps as $index => $value){
+                $addScripts .= 'var ' . $index . '_dropcaps = document.querySelectorAll(".' . $index . '_dropcaps");' . PHP_EOL;
+                $addScripts .= 'window.Dropcap.layout(' . $index . '_dropcaps, ' . $value . ');' . PHP_EOL;
+            }
+            $addScripts .= '</script>';
+        }
+        if ($this->_math) {
+            $mathjax = Docxpresso\CreateDocument::$config['js']['MathJax'];
+            $html .= '<script src="' . $mathjax . '" type="text/javascript"> </script>' . PHP_EOL; 
+        }
+        if ($this->_sortTables) {
+            $addScripts .= '<script>' . PHP_EOL;;
+            $addScripts .= 'var numFormat = "';
+            $addScripts .= $this->_sortNumberFormat;
+            $addScripts .= '";' . PHP_EOL;
+            $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/tableSorter.js');
+            $addScripts .= '</script>';    
+        }
         
         //we should now repair the DOM for div's inside p's that are
-        //generated for charts and images
+        //generated for charts and images. We also take care of drop caps if any
         $this->_repairDOM($this->_body);
+        
         $this->_body->formatOutput = false;//to avoid unwanted whitespaces
         $htmlBody = $this->_body->saveXML($this->_body->documentElement);
 
-        if (\count($this->_charts)){
+        if (\count($this->_charts) 
+            || \count($this->_comments)
+            || $this->_sortTables
+            || $this->_tabs
+            || \count($this->_dropcaps)){
             $htmlBody = \str_replace('</body>', 
                                      $addScripts . '</body>', 
                                      $htmlBody);
-        } 
+        }
         $html .= $htmlBody;
+		if ($this->_math) {
+			$html .= '</html>';
+		}
+                
+        //this is a hack for <wbr> in IE
+        $html = \str_replace('<wbr/>', '&#x200b;&#x200b;', $html);
 
         $html = \str_replace('<body>', 
                              '<div id="' . \trim($this->_prefix) . '">',
@@ -2952,14 +4620,65 @@ class ODF2HTML5
      * Removes padding from borderless paragraphs
      *
      * @param string $style
+     * $param array $paddings
      * @return string
      * @access private
      */
-    private function _removePadding($style)
+    private function _removePadding($style, $paddings)
     {
-        $regex = '/padding[^;]+;?/i';
-        $style = \preg_replace($regex, '', $style);
+        foreach ($paddings as $pad) {
+            $regex = '/padding-' . $pad . '[^;]+;?/i';
+            $style = \preg_replace($regex, '', $style);
+        }
         return \trim($style);
+    }
+    
+    /**
+     * This method regroups similar bordered paragraphs
+     *
+     * @param array $pGroup
+     * @access private
+     */
+    private function _reorderBorderedPs($pGroup)
+    {
+        //create a container div just before the first paragraph: the last 
+        //one in the array
+        $l = \count($pGroup);
+        $last = $pGroup[$l -1];
+        $class = $last->getAttribute('class');
+        $div = $last->ownerDocument->createElement('div');
+        $nSt = '';
+        if (isset($this->_pBorders[$class])) {
+            $bStyles = \implode(';', $this->_pBorders[$class]);
+            $nSt .= $bStyles . ';margin-bottom:0;';
+        }
+        if (isset($this->_pMargins[$class]) 
+            && !empty($this->_pMargins[$class]['margin-left'])) {
+            $nSt .= 'margin-left: ' . $this->_pMargins[$class]['margin-left'];
+            $nSt .= ';';
+        }
+        if (isset($this->_pMargins[$class]) 
+            && !empty($this->_pMargins[$class]['margin-right'])) {
+            $nSt .= 'margin-right: ' . $this->_pMargins[$class]['margin-right'];
+            $nSt .= ';';
+        }
+        $div->setAttribute('style', $nSt);
+        //clone, append
+        for ($k = $l; $k > 0; $k--) {
+           $p = $pGroup[$k - 1];
+           $newP = $p->cloneNode(true);
+           //remove the border and margins left and right from the paragraph
+           $pSt = 'border: none !important;';
+           $pSt .= 'margin-left: 0 !important;';
+           $pSt .= 'margin-right: 0 !important;';
+           $newP->setAttribute('style', $pSt);
+           $div->appendChild($newP);
+        }
+        $last->parentNode->insertBefore($div, $last);
+        //remove
+        for ($k = $l; $k > 0; $k--) {
+           $p->parentNode->removeChild($pGroup[$k - 1]);
+        }
     }
     
     /**
@@ -2983,6 +4702,7 @@ class ODF2HTML5
      */
     private function _repairDOM($dom)
     {
+        //remove directly divs that are childs of a p node
         $xpath = new \DOMXPath($dom);
         $query = '//p[./div]';
         $ps = $xpath->query($query);
@@ -3000,6 +4720,7 @@ class ODF2HTML5
                         $class = $p->getAttribute('class');
                         $newP->setAttribute('class', $class);
                         $p->parentNode->insertBefore($newP, $p);
+                        $openP = true;
                     }
                     $element = $child->cloneNode(true);
                     $newP->appendChild($element);
@@ -3007,6 +4728,312 @@ class ODF2HTML5
             }
             $p->parentNode->removeChild($p);
         }
+        //remove divs that are childs of a p node and are wrapped in a span
+        $xpath = new \DOMXPath($dom);
+        $query = '//p/span[./div]';
+        $sps = $xpath->query($query);
+        foreach ($sps as $sp) {
+            $openP = false;
+            $childs = $sp->childNodes;
+            foreach ($childs as $child) {
+                if ($child->nodeName == 'div') {
+                    $openP = false;
+                    $newDiv = $child->cloneNode(true);
+                    $sp->parentNode
+                       ->parentNode->insertBefore($newDiv, $sp->parentNode);
+                } else {
+                    if ($openP === false){
+                        $newP = $dom->createElement('p');
+                        $class = $sp->parentNode->getAttribute('class');
+                        $newP->setAttribute('class', $class);
+                        $sp->parentNode
+                           ->parentNode->insertBefore($newP, $sp->parentNode);
+                        $openP = true;
+                    }
+                    $element = $child->cloneNode(true);
+                    $newP->appendChild($element);
+                }
+            }
+            $sp->parentNode->removeChild($sp);
+        }
+        //remove divs that are childs of a p node and are wrapped in a span
+        $xpath = new \DOMXPath($dom);
+        $query = '//p/span[./div]';
+        $sps = $xpath->query($query);
+        foreach ($sps as $sp) {
+            $openP = false;
+            $childs = $sp->childNodes;
+            foreach ($childs as $child) {
+                if ($child->nodeName == 'div') {
+                    $openP = false;
+                    $newDiv = $child->cloneNode(true);
+                    $sp->parentNode
+                       ->parentNode->insertBefore($newDiv, $sp->parentNode);
+                } else {
+                    if ($openP === false){
+                        $newP = $dom->createElement('p');
+                        $class = $sp->parentNode->getAttribute('class');
+                        $newP->setAttribute('class', $class);
+                        $sp->parentNode
+                           ->parentNode->insertBefore($newP, $sp->parentNode);
+                        $openP = true;
+                    }
+                    $element = $child->cloneNode(true);
+                    $newP->appendChild($element);
+                }
+            }
+            $sp->parentNode->removeChild($sp);
+        }
+        //we should run now over contiguous paragraphs that may have
+        //common borders
+        $query2 = '//p';
+        $ps2 = $xpath->query($query2);
+        $l = $ps2->length;
+        $pGroup = array();
+        //run through all <p>s backwards
+        for ($k = $l; $k > 0; $k--) {
+            $paragraph = $ps2->item($k - 1);
+            $class = $paragraph->getAttribute('class');
+            if (isset($this->_pBorders[$class])) {
+                $border = true;
+            } else {
+                $border = false;
+            }
+            if ($border) {
+                //this p has a border
+                if (\count($pGroup) == 0) {
+                    $pGroup[] = $paragraph;
+                } else {
+                    $ll = \count($pGroup);
+                    $lastP = $pGroup[$ll - 1];
+                    //check if they share the same border styles
+                    $lastC = $lastP->getAttribute('class');
+                    $diff = \array_diff($this->_pBorders[$class],
+                                        $this->_pBorders[$lastC]);
+                    //check also that they are contiguous
+                    $nextNode = $paragraph->nextSibling;
+                    if (!empty($nextNode)){
+                        $sameNode = $nextNode->isSameNode($lastP);
+                    } else {
+                        $sameNode = false;
+                    }
+                    if (\count($diff) == 0 && $sameNode) {
+                        $pGroup[] = $paragraph;
+                    } else {
+                        //the border style has changed
+                        if (\count($pGroup) > 1) {
+                           $this->_reorderBorderedPs($pGroup); 
+                        }
+                        //restart pGroup;
+                        $pGroup = array();
+                    }
+                }
+            } else {
+                //check if there are paragraph groups left
+                if (\count($pGroup) > 1) {
+                    $this->_reorderBorderedPs($pGroup); 
+                }
+                //restart pGroup;
+                $pGroup = array();
+            }
+        }
+        //check if there are paragraph groups left
+        if (\count($pGroup) > 1) {
+            $this->_reorderBorderedPs($pGroup); 
+        }
+        //now take care of drop caps if there are any
+        foreach($this->_dropcaps as $key => $value){
+            $query = '//p[contains(concat(" ", @class, " "), " '. $key . ' ")]'
+                    . '/descendant::text()[1]';
+            $nodes = $xpath->query($query);
+
+            foreach ($nodes as $node) {
+                    $val = $node->nodeValue;
+                    $firstChar = substr($val, 0, 1);
+                    $remain = substr($val, 1);
+                    $node->nodeValue = $remain;
+                    $new = $node->ownerDocument->createElement('span', $firstChar);
+                    $new->setAttribute('class', $key . '_dropcaps dropcap');
+                    if (!empty($node)) {
+                        $node->parentNode->insertBefore($new, $node);
+                    } else {
+                        $node->appendChild($new);
+                    }
+            }
+        }
+        //TABLES
+        //we also have to remove the last empty paragraphs at the end of a table
+        //cell that is preceded by a table element
+        $tds = $dom->getElementsByTagName('td');
+        foreach($tds as $td){
+            $last = $td->lastChild;
+            if (!empty($last) &&
+                $last->nodeName == 'p' &&
+                $last->nodeValue == '' &&    
+                !empty($last->previousSibling)) {
+                $prev = $last->previousSibling;
+                if ($prev->nodeName == 'table'){
+                    $last->parentNode->removeChild($last);
+                } else if ($prev->nodeName == 'div' &&
+                           $prev->getAttribute('class') == 'dxoResponsiveTable'){
+                    $last->parentNode->removeChild($last);
+                }
+            }
+        }
+        //in the case of ODS we have to add a minimum width to the table
+        //because otherwise when there are many table cells the browser
+        //does not render well the inherited widths
+        if ($this->_docType == 'spreadsheet') {
+            $tables = $dom->getElementsByTagName('table');
+            foreach($tables as $table){
+                $tableWidth = 0;
+                $cols = $table->getElementsByTagName('col');
+                //we assume that all widths are given in rems
+                $colwidths = array();
+                $colwidthunits = array();
+                foreach($cols as $col){
+                    $span = $col->getAttribute('span');
+                    if (empty($span)){
+                        $span = 1;
+                    }
+                    $colw = (float) $col->getAttribute('data-colwidth');
+                    if (empty($colw)){
+                        $colw = 0;
+                    }
+                    for ($n = 0; $n < $span; $n++){
+                        $colwidths[] = $colw;
+                    }
+                    $colwunits = $col->getAttribute('data-colwidthunits');
+                    if (empty($colwunits)){
+                        $colwunits = '';
+                    }
+                    for ($n = 0; $n < $span; $n++){
+                        $colwidthunits[] = $colwunits;
+                    }
+                }
+                //now we check each col width for the first <tr>
+                $tr = $table->getElementsByTagName('tr')->item(0);
+                $tds = $tr->getElementsByTagName('td');
+                $tdLength = $tds->length;
+                $counter = 0;
+                $tdCounter = 1;
+                foreach($tds as $td){
+                    $colspan = $td->getAttribute('colspan');
+                    if (empty($colspan)){
+                        $colspan = 1;
+                    }
+                    if ($tdCounter < $tdLength || !empty($td->nodeValue)){
+                        if (empty($units)){
+                            //we assume units are coherent
+                            $units = $colwidthunits[$counter];
+                        }
+                        for ($k = 0; $k < $colspan; $k++){
+                            $tableWidth += $colwidths[$counter];
+                            $counter++;
+                        }
+                    }
+                    $tdCounter++;
+                }
+                if ($tableWidth > 0){
+                    $minwidth = 'min-width:' . $tableWidth . $units . ';';
+                    $table->setAttribute('style', $minwidth);
+                }
+            }
+        }
+        
+        //in case we are instructed to open external links in a new window we
+        //need some extra parsing
+        if ($this->_linkTargetToBlank) {
+            $query = '//a[contains(@href, "http://") or contains(@href, "https://")]';
+            $nodes = $xpath->query($query);
+            foreach ($nodes as $node) {
+                $node->setAttribute('target', '_blank');
+            }
+        }
+        //repair headers so they are always "clear" of body content
+        $headers = $dom->getElementsByTagName('header');
+        foreach($headers as $header){
+            $cleaner = $dom->createElement('p', ' ');
+            $pstyle = 'font-size: 1px; clear:both; margin: 0; padding:0';
+            $cleaner->setAttribute('style', $pstyle);
+            $header->appendChild($cleaner);
+        }
+        
+        //SPREADSHEETS
+        if($this->_docType == 'spreadsheet'){
+            //tables are included withih a cell and that breaks table rendering
+            //detect tables with charts
+            $query = '//table[.//div[contains(@id, "chart-")]]';
+            $nodes = $xpath->query($query);
+            foreach ($nodes as $node) {
+                $name = $node->getAttribute('data-table-name');
+                $query2 = './/div[contains(@id, "chart-")]';
+                $charts = $xpath->query($query2, $node);
+                foreach ($charts as $chart){
+                    $pchart = $chart->parentNode;
+                    $newChart = $pchart->cloneNode(true);
+                    $node->parentNode->insertBefore($newChart, $node);
+                    $pchart->parentNode->removeChild($pchart);
+                }
+            }
+            //remove tds with huge colspans that are generated by Excel
+            $query = '//tr/td[position() = last() and @colspan]';
+            $nodes = $xpath->query($query);
+            foreach ($nodes as $node) {
+                $colspan = $node->getAttribute('colspan');
+                if ($colspan > 100) {
+                    $node->parentNode->removeChild($node);
+                }
+            }
+        }
+        
+        //check if there are clipped images
+        //this is temporarily disabled
+        return;
+        foreach ($this->_clippedImages as $key => $value){
+            //query for divs with that style
+            $query = '//div[@class="' . $key . '"]';
+            $divs = $xpath->query($query);
+            foreach ($divs as $div) {
+                $anchor = $div->getAttribute('data-anchor-type');
+                $avoidAnchors = array('char' => true, 'as-char' => true);
+                if (!isset($avoidAnchors[$anchor])) {
+                    //get the img nodes
+                    $imgs = $div->getElementsByTagName('img');
+                    foreach ($imgs as $img) {
+                        $clip = $this->_clippedImages[$key];
+                        $style = $img->getAttribute('style');
+                        $w = parser\CSSPropsLexer::extractSingleProperty('width', 
+                                        $style);
+                        $h = parser\CSSPropsLexer::extractSingleProperty('height', 
+                                        $style);
+                        $regex = '/([0-9\.\-]+)\s*(px|em|rem|ex|%|in|cm|mm|pt|pc)*/i';
+                        \preg_match_all($regex, $clip, $matches);
+                        if (count($matches[0] == 4)) {
+                            $t = self::convert2rems($matches[0][0]);
+                            $r = self::convert2rems($matches[0][1]);
+                            $b = self::convert2rems($matches[0][2]);
+                            $l = self::convert2rems($matches[0][3]);
+                            //let us compute the clipping coordinates
+                            $nt = $t;
+                            $nr = floatval($w) - floatval($r);
+                            $nr .= 'rem';
+                            $nb = floatval($h) - floatval($b);
+                            $nb .= 'rem';
+                            $nl = $l;
+                            $cl = 'clip: rect(' . $nt . ', ';
+                            $cl .= $nr . ', ';
+                            $cl .= $nb . ', ';
+                            $cl .= $nl . ')';
+                            $style .=  $cl;
+                            $style .= '; position: absolute;';
+                            $img->setAttribute('style', $style);
+                        }
+                    }
+                }
+            }
+        }
+        
     }
     
     /**
@@ -3040,6 +5067,54 @@ class ODF2HTML5
     }
     
     /**
+     * Parses the table:align property
+     *
+     * @param string $name
+     * @param string $value
+     * @param bool $important
+     * @return string
+     * @access private
+     */
+    private function _tableAlign($name, $value, $important = false)
+    {
+        /*center: table aligns to the center between left and right margins. 
+        left: table aligns to the left margin. 
+        margins: table fills all the space between the left and right margins. 
+        right: table aligns to the right margin.*/
+        $style = '';
+        if ($value == 'center'){
+            $style = 'margin-left: auto';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+            $style .= 'margin-right: auto';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        } else if ($value == 'right'){
+            $style = 'margin-left: auto';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        } else if ($value == 'margins'){
+            $style = 'width: 100%';
+            if ($important) {
+                $style .= ' !important;';
+            } else {
+                $style .= ';';
+            }
+        }
+        
+        return $style;
+    }
+    
+    /**
      * Tags HTML and ODF nodes for later correspondence
      *
      * @param DOMNode $nodeHTML
@@ -3060,11 +5135,119 @@ class ODF2HTML5
             } else {
                 $this->_globalCounter[$tag] = 1;
             }
-            $nodeHTML->setAttribute('data-h5p', 
-                                    $tag . '=' . $this->_globalCounter[$tag]);
+            if (!empty($nodeHTML)) {
+                $nodeHTML->setAttribute('data-h5p', 
+                                        $tag . '=' . $this->_globalCounter[$tag]);
+            }
             $nodeODF->setAttribute('data-h5p', 
                                    $tag . '=' . $this->_globalCounter[$tag]);
         }
+    }
+    
+    /**
+     * gets the width property of a col style
+     * 
+     * @param string $style
+     * @return array
+     * @access private
+     */
+    private function _getColWidth($style) 
+    {
+        $matches = array();
+        $regex = '/width:\s*(-?[0-9]+\.?[0-9]*)\s*(px|em|rem|ex|in|cm|mm|pt|pc)?/i';
+        \preg_match($regex, $style, $matches);
+        $result = array();
+        if (isset($matches[1])){
+            $result[0] = $matches[1];
+        } else {
+            $result[0] = 0;
+        }
+        if (isset($matches[2])){
+            $result[1] = $matches[2];
+        } else {
+            $result[1] = 'undefined';
+        }
+        return $result;
+    }
+    
+    /**
+     * gets the first block type ancestor that accepts draw:frame
+     * 
+     * @param DOMNode $odfNode
+     * @return DOMNode
+     * @access private
+     */
+    private function _getFrameBlockAncestor($odfNode) 
+    {
+        $parents = array('text:p' => true, 
+                         'table:table-cell' => true);
+        $ancestor = $odfNode->parentNode;
+        if ($ancestor != NULL) {
+            if (isset($parents[$ancestor->nodeName])) {
+                return $ancestor;
+            } else {
+                $ancestor = $this->_getFrameBlockAncestor($ancestor);
+            }
+        } 
+        return $ancestor;
+    }
+	
+    /**
+     * cheks if a math formula should be of the block type
+     * 
+     * @param DOMNode $odfNode
+     * @return boolean
+     * @access private
+     */
+    private function _check4BlockMath($odfNode) 
+    {
+        $ancestor = $this->_getFrameBlockAncestor($odfNode);
+        if (!empty($ancestor)){
+            $childs = $ancestor->childNodes;
+            if ($childs->length == 1) {
+                return true;
+            } else {
+                $text = $odfNode->nodeValue;
+                $ancestorText = $ancestor->nodeValue;
+                if($text == $ancestorText){
+                        return true;
+                } else {
+                        return false;
+                }
+            }
+        } else {
+            return false;
+        }
+    }
+	
+   /**
+     * gets the fo:text-align property of a run of text
+     * 
+     * @param srting $mstyle
+     * @return string
+     * @access private
+     */
+    private function _getMathTextAlign($mstyle)
+    {
+        $ta = array (
+                'start' => 'left',
+                'center' => 'center',
+                'end' => 'right',
+                'justify' => 'center',
+                'inside' => 'left',
+                'outside' => 'right',
+                'left' => 'left',
+                'right' => 'right',
+        );
+        $textAlign = 'left';
+        $nodes = $this->_xpath->query('//style:style[@style:name="' . $mstyle . '"]/style:paragraph-properties');
+        foreach ($nodes as $node) {
+            $prop = $node->getAttribute('fo:text-align');
+        }
+        if (!empty($prop) && isset($ta[$prop])) {
+            $textAlign = $ta[$prop];
+        }
+        return $textAlign;
     }
     
     /**
@@ -3076,7 +5259,10 @@ class ODF2HTML5
      */
     private function _updateStyleMasterRelationships($style2style)
     {
-        foreach ($style2style as $key => $value ) {
+        //COMMENT: it seems that Libre Office and open Office do not take into
+        //account the inheritance for the master page layout
+        
+        /*foreach ($style2style as $key => $value ) {
             //run over the entries that have no parent themselves
             if (!isset($style2style[$value])) {
                 if (isset($this->_style2master[$value])) {
@@ -3087,7 +5273,7 @@ class ODF2HTML5
         }
         if (\count($style2style) > 0) {
             $this->_updateStyleMasterRelationships($style2style);
-        }
+        }*/
     }
     
     /*Additional plugin utilities*/
@@ -3203,7 +5389,7 @@ class ODF2HTML5
         } else if ($rawUnits == 'pc') {
             //pc is the acronym for 'pica' that corresponds to 12 points
             $val = $rawVal * 12;
-        }  else if ($rawUnits == 'em') {
+        }  else if ($rawUnits == 'em' || $rawUnits == 'rem') {
             //em: this is just an estimate
             $val = $rawVal * 10;
         } else if ($rawUnits == 'ex') {
@@ -3228,7 +5414,7 @@ class ODF2HTML5
         } else if ($unit == 'pc') {
             //pc is the acronym for 'pica' that corresponds to 12 points
             return  $val/12;
-        }  else if ($unit == 'em') {
+        }  else if ($unit == 'em' || $unit == 'rem') {
             //em: this is just an estimate
             return  $val/10;
         } else if ($unit == 'ex') {
@@ -3237,6 +5423,39 @@ class ODF2HTML5
         } else {
             return 0;
         }
+    }
+    
+    /**
+     * Gets a CSS property and checks for unit to be converted to rems
+     * We assueme global units have been set so 1rem corresponds aprox to
+     * 12px or 10pt
+     *
+     * @param string $prop
+     * @return float
+     * @access public
+     * @static
+     */
+    public static function convert2rems($prop)
+    {   
+        $regex = '/([0-9]+\.?[0-9]*)\s*(px|em|rem|ex|in|cm|mm|pt|pc)/i';
+        $result = \preg_replace_callback($regex, 'self::unit2rems', $prop);
+        return $result;
+    }
+    
+    /**
+     * Gets a CSS property and chekcs for unit to be converted to rems
+     * We assueme global units have been set so 1rem corresponds aprox to
+     * 12px or 10pt
+     *
+     * @param string $prop
+     * @return string
+     * @access public
+     * @static
+     */
+    public static function unit2rems($prop)
+    {   
+        $num = self::convertUnits('rem', $prop[0]);
+        return $num . 'rem';
     }
     
     /**
@@ -3277,6 +5496,183 @@ class ODF2HTML5
         } else {
             return array_sum($raw) . $unit;
         }
+    }
+	
+    /**
+     * Sanitize input to be included within an eval for computing a math formula
+     *
+     * @param string $str
+     * @return string
+     * @access public
+     * @static
+     */
+    public static function sanitize4eval($str)
+    {   
+        $metachars = array('$', '{', '}', '[', ']', '`', ';', '"', '\'');
+        $str = \str_replace($metachars, '', $str);
+        return $str;
+    }
+    
+    /**
+     * reverses the sign of a CSS property
+     *
+     * @param string $str
+     * @param complete $bool
+     * @return string
+     * @access public
+     * @static
+     */
+    public static function reverseSign($str, $complete = false)
+    {
+        $str = \trim($str);
+        $negative = false;
+        if(strpos($str, '-') === 0){
+            $negative = true;
+        }
+        
+        if ($negative) {
+            $str = \substr($str, 1);
+        } else if (!$negative && $complete){
+            $str = '-' . $str;
+        }
+        return $str;
+    }
+    
+    /**
+     * This method computes the number of nested lists
+     *
+     * @param DOMNode $list
+     * @return integer
+     * @access private
+     */
+    private function _computeListDepth($list, $depth = 0)
+    {
+        $child = $list->firstChild->firstChild;
+        $tag = $child->nodeName;
+        if($tag == 'text:list'){
+            $depth++;
+            return $this->_computeListDepth($child, $depth);
+        } else {
+            return $depth;
+        }
+       
+    }
+    
+    /**
+     * Sets the transform parameter following CSS standards
+     *
+     * @param string $transform
+     * @return string
+     * @access private
+     */
+    private function _parseTransform($name, $value, $width = 0, $height = 0) 
+    {
+        $transform = \trim($value);
+        $regex = '/(\s?[^\(]*\([^\)]*\))/';
+        preg_match_all($regex, $transform, $matches);
+        $list = $matches[0];
+        $l = \count($list);
+        for ($j = 0; $j < $l; $j++) {
+            $list[$j] = $this->_translate($list[$j]);
+            $list[$j] = $this->_rotate($list[$j], $width, $height);
+        }
+        //the ODF standard changes the order
+        $def = \array_reverse($list);
+       
+        $prop = \implode(' ', $def);
+        return 'transform: ' . $prop . ';';
+    }
+    
+    /**
+     * Extracts the rotation parameters of a SVG transform
+     *
+     * @param string $transform
+     * @return string
+     * @access private
+     */
+    private function _rotate($transform, $width, $height) 
+    {
+        //we need the width and height to change the center of rotation
+        $tregex = '/rotate\s?\(([^\)]*)\)/';
+
+        preg_match_all($tregex, $transform, $matches);
+
+        if (\count($matches[1])) {
+            $replace = array();
+            foreach($matches[1] as $value){
+                    $value = preg_replace('/\s+/', ' ', $value);
+                    //the factor shoud be 60 but it renders better
+                    //with 57.296(!?)
+                    $replace[] = $value * 57.2957 * (-1) . 'deg';
+            }
+            $transform = str_replace($matches[1], $replace, $transform);
+            $transform = str_replace(' ', '', $transform);
+            $pretrans = 'translate(-' . $width . ', -' . $height .') ';
+            $postrans = ' translate(' . $width . ', ' . $height .')';
+            $transform = $pretrans . $transform . $postrans;
+        }
+        
+        return $transform;
+        
+    }
+    
+    /**
+     * Extracts the translation parameters of a SVG transform
+     *
+     * @param string $transform
+     * @return array
+     * @access private
+     */
+    private function _translate($transform) 
+    {
+        $tregex = '/translate\s?\(([^\)]*)\)/';
+
+        preg_match_all($tregex, $transform, $matches);
+
+        if (\count($matches[1])) {
+            $replace = array();
+            foreach($matches[1] as $value){
+                    $value = preg_replace('/\s+/', ' ', $value);
+                    $replace[] = implode(',', explode(' ', $value));
+            }
+            $transform = str_replace($matches[1], $replace, $transform);
+            $transform = str_replace(' ', '', $transform);
+        }
+        
+        return $transform;
+        
+    }
+    
+    /**
+     * resizes a given data by the provided factor
+     *
+     * @param float $factor
+     * @param string $prop
+     * @return string
+     * @access private
+     */
+    private function _resize($factor, $prop)
+    {   
+        if (empty($prop)) {
+            return 0;
+        }
+        $matches = array();
+        $regex = '/([0-9]+\.?[0-9]*)\s*(px|em|rem|ex|in|cm|mm|pt|pc)?/i';
+        \preg_match($regex, $prop, $matches);
+        $rawVal = $matches[1];
+        if (isset($matches[2])) {
+            $rawUnits = $matches[2];
+        } else {
+            $rawUnits = 'pt';
+        }
+        if (!isset($rawVal)) {
+            //regex failed
+            return 0;
+        }
+        //rescale the value to points
+        $val = $rawVal * $factor;
+        $result = $val . $rawUnits;
+        return $result;
     }
 
 }

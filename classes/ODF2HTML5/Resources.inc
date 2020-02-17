@@ -10,7 +10,7 @@
 Plugin Name: Docxpresso
 Plugin URI: http://www.docxpresso.com
 Description: Docxpresso inserts content from a document file (.odt).
-Version: 1.0
+Version: 2.1
 Author: No-nonsense Labs
 License: GPLv2 or later
 */
@@ -368,6 +368,7 @@ class Resources
         'style:table-row-properties' => 'tr',
         'style:text-properties' => 'span',
     );
+    
     /**
      * style families
      * @access public
@@ -382,10 +383,11 @@ class Resources
         'table-cell' => 'td',
         'table-column' => 'col',
         'table-row' => 'tr',
+        'section' => 'div',
         'text' => 'span',
     );
     
-     /**
+    /**
      * This array controls that certain style properties of certain style
      * nodes are not parsed
      * @access public
@@ -412,13 +414,13 @@ class Resources
 	'fo:border-top' => array('method' => '_parseBorders'),
 	'fo:break-after' => 'break-after',
 	'fo:break-before' => 'break-before',
-	'fo:clip' => 'clip',
+	'fo:clip' => array('composedProp' => '_parseClip'),
 	'fo:color' => 'color',
-	'fo:column-count' => 'column-count',
+	'fo:column-count' => array('method' => '_parseColumnCount'),
 	'fo:column-gap' => 'column-gap',
 	'fo:country' => 'country',
 	'fo:end-indent' => 'end-indent',
-	'fo:font-family' => 'font-family',
+	'fo:font-family' => array('method' => '_parseFontFamily'),
 	'fo:font-size' => 'font-size',
 	'fo:font-style' => 'font-style',
 	'fo:font-variant' => 'font-variant',
@@ -455,7 +457,7 @@ class Resources
 	'fo:space-after' => 'space-after',
 	'fo:space-before' => 'space-before',
 	'fo:start-indent' => 'start-indent',
-	'fo:text-align' => 'text-align',
+	'fo:text-align' => array('method' => '_parseTextAlign'),
 	'fo:text-align-last' => 'text-align-last',
 	'fo:text-indent' => 'text-indent',
 	'fo:text-shadow' => 'text-shadow',
@@ -705,7 +707,7 @@ class Resources
 	'style:font-family-generic-asian' => 0,
 	'style:font-family-generic-complex' => 0,
 	'style:font-independent-line-spacing' => 0,
-	'style:font-name' => 'font-family',
+	'style:font-name' => array('method' => '_parseFontFamily'),
 	'style:font-name-asian' => 0,
 	'style:font-name-complex' => 0,
 	'style:font-pitch' => 0,
@@ -759,8 +761,8 @@ class Resources
 	'style:list-style-name' => 0,
 	'style:master-page-name' => 0,
 	'style:may-break-between-rows' => 0,
-	'style:min-row-height' => 0,
-	'style:mirror' => 0,
+	'style:min-row-height' => 'height',//browsers do not parse min-height
+	'style:mirror' => array('method' => '_parseMirror'),
 	'style:name' => 0,
 	'style:next-style-name' => 0,
 	'style:num-format' => 0,
@@ -786,14 +788,14 @@ class Resources
 	'style:rel-column-width' => 0,
 	'style:rel-height' => 0,
 	'style:rel-width' => 0,
-	'style:repeat' => 0,
+	'style:repeat' => array('method' => '_parseBackgroundRepeat'),
 	'style:repeat-content' => 0,
 	'style:rotation-align' => 0,
 	'style:rotation-angle' => 0,
-	'style:row-height' => 0,
+	'style:row-height' => 'height',
 	'style:ruby-align' => 0,
 	'style:ruby-position' => 0,
-	'style:run-through' => 0,
+	'style:run-through' => array('composedProp' => '_parseRunThrough'),
 	'style:scale-to' => 0,
 	'style:scale-to-pages' => 0,
 	'style:script-type' => 0,
@@ -813,7 +815,7 @@ class Resources
 	'style:text-emphasize' => 0,
 	'style:text-line-through-color' => 'text-decoration-color',
 	'style:text-line-through-mode' => 0,
-	'style:text-line-through-style' => 0,
+	'style:text-line-through-style' => array('method' => '_parseDecoration'),
 	'style:text-line-through-text' => 0,
 	'style:text-line-through-text-style' => array('method' => '_parseDecoration'),
 	'style:text-line-through-type' => 0,
@@ -824,20 +826,20 @@ class Resources
 	'style:text-overline-style' => array('method' => '_parseDecoration'),
 	'style:text-overline-type' => 0,
 	'style:text-overline-width' => 0,
-	'style:text-position' => 0,
+	'style:text-position' => array('method' => '_parseTextPosition'),
 	'style:text-rotation-angle' => 0,
 	'style:text-rotation-scale' => 0,
 	'style:text-scale' => 0,
 	'style:text-underline-color' => 'text-decoration-color',
 	'style:text-underline-mode' => 0,
 	'style:text-underline-style' => array('method' => '_parseDecoration'),
-	'style:text-underline-type' => 0,
+	'style:text-underline-type' => 'text-decoration',
 	'style:text-underline-width' => 0,
 	'style:type' => 0,
 	'style:use-optimal-column-width' => 0,
 	'style:use-optimal-row-height' => 0,
-	'style:use-window-font-color' => 0,
-	'style:vertical-align' => 0,
+	'style:use-window-font-color' => array('composedProp' => '_parseWindowFont'),
+	'style:vertical-align' => 'vertical-align',
 	'style:vertical-pos' => 0,
 	'style:vertical-rel' => 0,
 	'style:volatile' => 0,
@@ -847,7 +849,7 @@ class Resources
 	'style:wrap-contour' => 0,
 	'style:wrap-contour-mode' => 0,
 	'style:wrap-dynamic-threshold' => 0,
-	'style:writing-mode' => 'writing-mode',
+	'style:writing-mode' => array('composedProp' => '_parseWritingMode'),
 	'style:writing-mode-automatic' => 0,
         );
     /**
@@ -914,7 +916,7 @@ class Resources
 	'svg:d' => 0,
 	'svg:descent' => 0,
 	'svg:fill-rule' => 0,
-	'svg:font-family' => 'font-family',
+	'svg:font-family' => array('method' => '_parseFontFamily'),
 	'svg:font-size' => 'font-size',
 	'svg:font-stretch' => 'font-stretch',
 	'svg:font-style' => 'font-style',
@@ -999,7 +1001,7 @@ class Resources
 	'table:acceptance-state' => 0,
 	'table:add-empty-lines' => 0,
 	'table:algorithm' => 0,
-	'table:align' => 0,
+	'table:align' => array('method' => '_tableAlign'),
 	'table:allow-empty-cell' => 0,
 	'table:application-data' => 0,
 	'table:automatic-find-labels' => 0,
@@ -1319,7 +1321,7 @@ class Resources
         'text:date-value' => 0,
         'text:default-style-name' => 0,
         'text:description' => 0,
-        'text:display' => 0,
+        'text:display' => 'display',
         'text:display-levels' => 0,
         'text:display-outline-level' => 0,
         'text:dont-balance-text-columns' => 0,
