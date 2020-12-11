@@ -4522,6 +4522,9 @@ class ODF2HTML5
         }
         //take now into account the scripts
         $addScripts = '';
+        $addScripts .= '<script>';
+        $addScripts .= \file_get_contents(dirname(__FILE__) . '/../../lib/vendor/js/footnotes.js');
+        $addScripts .= '</script>';
         if (\count($this->_charts)){
             //TODO: load the javascript and CSS in a proper way :-)
             $addScripts .= '<style>';

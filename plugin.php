@@ -4,7 +4,7 @@
   Plugin Name: Docxpresso
   Plugin URI: http://www.docxpresso.com/plugins/wp-docxpresso
   Description: Insert content coming from an Office file (.odt or .ods) with all kinds of elements: complex formatting, charts, sortable tables, youtube videos, Google docs, etcetera.
-  Version: 2.5
+  Version: 2.6
   Author: No-nonsense Labs
   Author URI: http://www.docxpresso.com
  */
